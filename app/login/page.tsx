@@ -1,11 +1,11 @@
 "use client";
 
-import { FormEvent, useState } from "react";
+import { FormEvent, Suspense, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 
-export default function LoginPage() {
+function LoginForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
 
@@ -60,11 +60,6 @@ export default function LoginPage() {
         } else if (
           errorMessage.includes("email not confirmed")
         ) {
-          /*
-           * Confirm Email OFF থাকার কথা।
-           * যদি এই error আসে, Supabase Authentication
-           * settings আবার যাচাই করতে হবে।
-           */
           setError(
             "এই অ্যাকাউন্টের Email confirmation চালু আছে। Supabase-এর Confirm Email OFF আছে কিনা যাচাই করুন।"
           );
@@ -96,14 +91,6 @@ export default function LoginPage() {
         return;
       }
 
-      /*
-       * Middleware থেকে আসা next URL।
-       *
-       * উদাহরণ:
-       * /login?next=/withdraw
-       *
-       * Login সফল হলে → /withdraw
-       */
       const nextPath = searchParams.get("next");
 
       const safeNextPath =
@@ -115,9 +102,6 @@ export default function LoginPage() {
 
       setSuccess("Login সফল হয়েছে।");
 
-      /*
-       * Success message দেখানোর জন্য ছোট delay।
-       */
       setTimeout(() => {
         router.replace(safeNextPath);
         router.refresh();
@@ -140,7 +124,6 @@ export default function LoginPage() {
     <main className="min-h-screen bg-[#f6f8f7] px-4 py-8">
       <div className="mx-auto w-full max-w-md">
 
-        {/* Brand */}
         <Link
           href="/register"
           className="mb-6 flex items-center gap-3"
@@ -160,7 +143,6 @@ export default function LoginPage() {
           </div>
         </Link>
 
-        {/* Card */}
         <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm sm:p-7">
 
           <h2 className="text-2xl font-black text-slate-900">
@@ -171,14 +153,12 @@ export default function LoginPage() {
             আপনার ব্যক্তিগত অ্যাকাউন্টে প্রবেশ করুন।
           </p>
 
-          {/* Error */}
           {error && (
             <div className="mt-5 rounded-2xl border border-red-200 bg-red-50 p-3 text-sm font-semibold text-red-700">
               {error}
             </div>
           )}
 
-          {/* Success */}
           {success && (
             <div className="mt-5 rounded-2xl border border-green-200 bg-green-50 p-3 text-sm font-semibold text-green-700">
               {success}
@@ -190,7 +170,6 @@ export default function LoginPage() {
             className="mt-6 space-y-4"
           >
 
-            {/* Email */}
             <div>
               <label className="mb-1.5 block text-xs font-black text-slate-700">
                 Gmail / ইমেইল
@@ -209,7 +188,6 @@ export default function LoginPage() {
               />
             </div>
 
-            {/* Password */}
             <div>
               <label className="mb-1.5 block text-xs font-black text-slate-700">
                 পাসওয়ার্ড
@@ -228,7 +206,6 @@ export default function LoginPage() {
               />
             </div>
 
-            {/* Submit */}
             <button
               type="submit"
               disabled={loading}
@@ -238,7 +215,6 @@ export default function LoginPage() {
             </button>
           </form>
 
-          {/* Registration */}
           <div className="mt-6 border-t border-slate-100 pt-5 text-center">
             <p className="text-sm text-slate-500">
               আপনার অ্যাকাউন্ট নেই?
@@ -254,5 +230,25 @@ export default function LoginPage() {
         </div>
       </div>
     </main>
+  );
+}
+
+function LoginLoading() {
+  return (
+    <main className="min-h-screen bg-[#f6f8f7] px-4 py-8">
+      <div className="mx-auto flex min-h-[calc(100vh-4rem)] w-full max-w-md items-center justify-center">
+        <div className="text-sm font-semibold text-slate-500">
+          Login লোড হচ্ছে...
+        </div>
+      </div>
+    </main>
+  );
+}
+
+export default function LoginPage() {
+  return (
+    <Suspense fallback={<LoginLoading />}>
+      <LoginForm />
+    </Suspense>
   );
 }
