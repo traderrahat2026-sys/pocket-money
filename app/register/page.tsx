@@ -19,8 +19,12 @@ export default function RegisterPage() {
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
 
-  const handleRegister = async (e: FormEvent<HTMLFormElement>) => {
-    e.preventDefault();
+  async function handleRegister(
+    event: FormEvent<HTMLFormElement>
+  ) {
+    event.preventDefault();
+
+    if (loading) return;
 
     setError("");
     setSuccess("");
@@ -38,17 +42,26 @@ export default function RegisterPage() {
       !password ||
       !confirmPassword
     ) {
-      setError("Please fill in all fields.");
+      setError("সবগুলো তথ্য পূরণ করুন।");
       return;
     }
 
     if (password.length < 6) {
-      setError("Password must be at least 6 characters.");
+      setError("পাসওয়ার্ড কমপক্ষে ৬ অক্ষরের হতে হবে।");
       return;
     }
 
     if (password !== confirmPassword) {
-      setError("Passwords do not match.");
+      setError("দুইটি পাসওয়ার্ড একই নয়।");
+      return;
+    }
+
+    const normalizedPhone = cleanPhone.replace(/\s+/g, "");
+
+    if (!/^01[3-9]\d{8}$/.test(normalizedPhone)) {
+      setError(
+        "সঠিক ১১ সংখ্যার বাংলাদেশি মোবাইল নম্বর দিন।"
+      );
       return;
     }
 
@@ -56,86 +69,123 @@ export default function RegisterPage() {
 
     try {
       /*
-       * Create Supabase Auth account.
+       * প্রথমে Supabase Auth account তৈরি করা হচ্ছে।
        *
-       * The same email + password will be used for future login.
+       * Confirm Email OFF থাকলে confirmation email লাগবে না।
        */
-      const { data, error: signUpError } = await supabase.auth.signUp({
+      const {
+        data,
+        error: signUpError,
+      } = await supabase.auth.signUp({
         email: cleanEmail,
         password,
         options: {
           data: {
             username: cleanUsername,
             full_name: cleanFullName,
-            phone: cleanPhone,
+            phone: normalizedPhone,
           },
         },
       });
 
       if (signUpError) {
-        const message = signUpError.message.toLowerCase();
+        const message =
+          signUpError.message.toLowerCase();
 
         if (
           message.includes("already registered") ||
           message.includes("already exists") ||
-          message.includes("user already registered")
+          message.includes("user already registered") ||
+          message.includes("email address is already registered") ||
+          message.includes("user with this email already exists")
         ) {
           setError(
-            "An account with this Gmail already exists. Please login."
+            "এই Gmail দিয়ে আগে থেকেই একটি অ্যাকাউন্ট আছে। Login করুন।"
+          );
+        } else if (
+          message.includes("rate limit") ||
+          message.includes("too many requests")
+        ) {
+          setError(
+            "অনেকবার চেষ্টা করা হয়েছে। কিছুক্ষণ পরে আবার চেষ্টা করুন।"
+          );
+        } else if (
+          message.includes("invalid email")
+        ) {
+          setError("সঠিক Gmail / ইমেইল দিন।");
+        } else if (
+          message.includes("password")
+        ) {
+          setError(
+            "পাসওয়ার্ড কমপক্ষে ৬ অক্ষরের হতে হবে।"
           );
         } else {
-          setError(signUpError.message);
+          console.error(
+            "Supabase signup error:",
+            signUpError
+          );
+
+          setError(
+            "Registration করা যায়নি। তথ্যগুলো পরীক্ষা করে আবার চেষ্টা করুন।"
+          );
         }
 
         return;
       }
 
       if (!data.user) {
-        setError("Account could not be created. Please try again.");
+        setError(
+          "অ্যাকাউন্ট তৈরি করা যায়নি। আবার চেষ্টা করুন।"
+        );
         return;
       }
 
       /*
-       * If email confirmation is OFF, Supabase should create
-       * an active session immediately.
+       * Auth account তৈরি হওয়ার পর profile trigger
+       * metadata থেকে profile তৈরি করবে।
+       *
+       * এখানে profiles table SELECT করা হচ্ছে না।
+       * তাই নতুন logged-out user-এর RLS-এর কারণে
+       * Registration আটকে যাবে না।
        */
-      if (data.session) {
-        setSuccess("Account created successfully. Logging you in...");
-
-        setTimeout(() => {
-          router.replace("/");
-          router.refresh();
-        }, 700);
-
-        return;
-      }
 
       /*
-       * If this appears, Email Confirmation is still enabled
-       * in Supabase.
+       * Registration-এর পর automatic login চাই না।
+       * তাই session clear করছি।
        */
+      await supabase.auth.signOut();
+
       setSuccess(
-        "Account created. Please confirm your email address before logging in."
+        "Registration সফল হয়েছে। এখন Login করুন।"
       );
 
       setTimeout(() => {
         router.replace("/login");
-      }, 1200);
-    } catch {
-      setError("Something went wrong. Please try again.");
+        router.refresh();
+      }, 1000);
+    } catch (error) {
+      console.error(
+        "Registration error:",
+        error
+      );
+
+      setError(
+        "কিছু সমস্যা হয়েছে। আবার চেষ্টা করুন।"
+      );
     } finally {
       setLoading(false);
     }
-  };
+  }
 
   return (
     <main className="min-h-screen bg-[#f7faf7] px-4 py-8">
       <div className="mx-auto flex min-h-[calc(100vh-4rem)] w-full max-w-md items-center">
         <div className="w-full">
+
           {/* Brand */}
           <div className="mb-8 text-center">
             <Link
-              href="/"
+              href="/register"
               className="inline-flex items-center justify-center"
             >
               <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-[#7ed957] shadow-lg shadow-green-100">
@@ -146,40 +196,49 @@ export default function RegisterPage() {
             </Link>
 
             <h1 className="mt-5 text-3xl font-black tracking-tight text-gray-900">
-              Create Account
+              Registration
             </h1>
 
             <p className="mt-2 text-sm text-gray-500">
-              Join Pocket Money and start earning rewards
+              Pocket Money-তে আপনার অ্যাকাউন্ট তৈরি করুন
             </p>
           </div>
 
           {/* Card */}
           <div className="rounded-3xl border border-gray-100 bg-white p-5 shadow-[0_15px_50px_rgba(0,0,0,0.06)] sm:p-7">
+
+            {/* Error */}
             {error && (
               <div className="mb-5 rounded-2xl border border-red-100 bg-red-50 px-4 py-3 text-sm font-medium leading-5 text-red-600">
                 {error}
               </div>
             )}
 
+            {/* Success */}
             {success && (
               <div className="mb-5 rounded-2xl border border-green-100 bg-green-50 px-4 py-3 text-sm font-medium leading-5 text-green-700">
                 {success}
               </div>
             )}
 
-            <form onSubmit={handleRegister} className="space-y-4">
+            <form
+              onSubmit={handleRegister}
+              className="space-y-4"
+            >
+
               {/* Full Name */}
               <div>
                 <label className="mb-2 block text-sm font-semibold text-gray-700">
-                  Full Name
+                  পূর্ণ নাম
                 </label>
 
                 <input
                   type="text"
                   value={fullName}
-                  onChange={(e) => setFullName(e.target.value)}
-                  placeholder="Enter your full name"
+                  onChange={(event) =>
+                    setFullName(event.target.value)
+                  }
+                  placeholder="আপনার পূর্ণ নাম দিন"
                   autoComplete="name"
                   disabled={loading}
                   className="h-12 w-full rounded-2xl border border-gray-200 bg-gray-50 px-4 text-sm outline-none transition focus:border-[#7ed957] focus:bg-white focus:ring-4 focus:ring-green-50 disabled:opacity-60"
@@ -189,14 +248,16 @@ export default function RegisterPage() {
               {/* Username */}
               <div>
                 <label className="mb-2 block text-sm font-semibold text-gray-700">
-                  Username
+                  ইউজারনেম
                 </label>
 
                 <input
                   type="text"
                   value={username}
-                  onChange={(e) => setUsername(e.target.value)}
-                  placeholder="Choose a username"
+                  onChange={(event) =>
+                    setUsername(event.target.value)
+                  }
+                  placeholder="একটি ইউজারনেম দিন"
                   autoComplete="username"
                   disabled={loading}
                   className="h-12 w-full rounded-2xl border border-gray-200 bg-gray-50 px-4 text-sm outline-none transition focus:border-[#7ed957] focus:bg-white focus:ring-4 focus:ring-green-50 disabled:opacity-60"
@@ -206,67 +267,86 @@ export default function RegisterPage() {
               {/* Phone */}
               <div>
                 <label className="mb-2 block text-sm font-semibold text-gray-700">
-                  Phone Number
+                  মোবাইল নম্বর
                 </label>
 
                 <input
                   type="tel"
+                  inputMode="numeric"
                   value={phone}
-                  onChange={(e) => setPhone(e.target.value)}
+                  onChange={(event) =>
+                    setPhone(event.target.value)
+                  }
                   placeholder="01XXXXXXXXX"
                   autoComplete="tel"
                   disabled={loading}
                   className="h-12 w-full rounded-2xl border border-gray-200 bg-gray-50 px-4 text-sm outline-none transition focus:border-[#7ed957] focus:bg-white focus:ring-4 focus:ring-green-50 disabled:opacity-60"
                 />
+
+                <p className="mt-1.5 text-xs text-gray-400">
+                  একটি মোবাইল নম্বর দিয়ে একটি অ্যাকাউন্ট করা যাবে।
+                </p>
               </div>
 
               {/* Email */}
               <div>
                 <label className="mb-2 block text-sm font-semibold text-gray-700">
-                  Gmail / Email
+                  Gmail / ইমেইল
                 </label>
 
                 <input
                   type="email"
                   value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  placeholder="Enter your Gmail"
+                  onChange={(event) =>
+                    setEmail(event.target.value)
+                  }
+                  placeholder="আপনার Gmail দিন"
                   autoComplete="email"
                   disabled={loading}
                   className="h-12 w-full rounded-2xl border border-gray-200 bg-gray-50 px-4 text-sm outline-none transition focus:border-[#7ed957] focus:bg-white focus:ring-4 focus:ring-green-50 disabled:opacity-60"
                 />
+
+                <p className="mt-1.5 text-xs text-gray-400">
+                  একটি Gmail দিয়ে একটি অ্যাকাউন্ট করা যাবে।
+                </p>
               </div>
 
               {/* Password */}
               <div>
                 <label className="mb-2 block text-sm font-semibold text-gray-700">
-                  Password
+                  পাসওয়ার্ড
                 </label>
 
                 <input
                   type="password"
                   value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  placeholder="Create a password"
+                  onChange={(event) =>
+                    setPassword(event.target.value)
+                  }
+                  placeholder="একটি পাসওয়ার্ড তৈরি করুন"
                   autoComplete="new-password"
                   disabled={loading}
                   className="h-12 w-full rounded-2xl border border-gray-200 bg-gray-50 px-4 text-sm outline-none transition focus:border-[#7ed957] focus:bg-white focus:ring-4 focus:ring-green-50 disabled:opacity-60"
                 />
+
+                <p className="mt-1.5 text-xs text-gray-400">
+                  কমপক্ষে ৬ অক্ষর।
+                </p>
               </div>
 
               {/* Confirm Password */}
               <div>
                 <label className="mb-2 block text-sm font-semibold text-gray-700">
-                  Confirm Password
+                  পাসওয়ার্ড নিশ্চিত করুন
                 </label>
 
                 <input
                   type="password"
                   value={confirmPassword}
-                  onChange={(e) =>
-                    setConfirmPassword(e.target.value)
+                  onChange={(event) =>
+                    setConfirmPassword(event.target.value)
                   }
-                  placeholder="Enter password again"
+                  placeholder="আবার পাসওয়ার্ড দিন"
                   autoComplete="new-password"
                   disabled={loading}
                   className="h-12 w-full rounded-2xl border border-gray-200 bg-gray-50 px-4 text-sm outline-none transition focus:border-[#7ed957] focus:bg-white focus:ring-4 focus:ring-green-50 disabled:opacity-60"
@@ -279,14 +359,16 @@ export default function RegisterPage() {
                 disabled={loading}
                 className="mt-2 flex h-13 w-full items-center justify-center rounded-2xl bg-[#7ed957] px-5 text-sm font-bold text-white shadow-lg shadow-green-100 transition hover:bg-[#70ca4c] active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-60"
               >
-                {loading ? "Creating Account..." : "Create Account"}
+                {loading
+                  ? "Registration হচ্ছে..."
+                  : "Registration"}
               </button>
             </form>
 
             {/* Login */}
             <div className="mt-7 border-t border-gray-100 pt-6 text-center">
               <p className="text-sm text-gray-500">
-                Already have an account?
+                আগে থেকেই অ্যাকাউন্ট আছে?
               </p>
 
               <Link
@@ -298,14 +380,16 @@ export default function RegisterPage() {
             </div>
           </div>
 
+          {/* Bottom */}
           <div className="mt-6 text-center">
             <Link
-              href="/"
+              href="/register"
               className="text-sm font-medium text-gray-500 hover:text-gray-800"
             >
-              ← Back to Home
+              ← Registration পেজে থাকুন
             </Link>
           </div>
+
         </div>
       </div>
     </main>
