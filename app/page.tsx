@@ -106,6 +106,7 @@ export default function Home() {
   const [loadingReferral, setLoadingReferral] = useState(false);
 
   const requiredReferrals = 10;
+
   const referralProgress = Math.min(
     referralCount,
     requiredReferrals
@@ -121,35 +122,80 @@ export default function Home() {
   useEffect(() => {
     let mounted = true;
 
-    const checkAuth = async () => {
+    async function initializeAuth() {
       try {
-        const { data } =
-          await supabase.auth.getSession();
+        /*
+         * Profile page যেহেতু getUser() দিয়ে সঠিক user পাচ্ছে,
+         * Home page-ও একই server-verified auth state ব্যবহার করবে।
+         */
+        const {
+          data: { user },
+          error,
+        } = await supabase.auth.getUser();
 
         if (!mounted) return;
 
-        setIsLoggedIn(!!data.session);
-      } catch {
-        if (!mounted) return;
+        if (error) {
+          console.error(
+            "HOME AUTH ERROR:",
+            error
+          );
 
-        setIsLoggedIn(false);
+          setIsLoggedIn(false);
+        } else {
+          setIsLoggedIn(!!user);
+        }
+      } catch (error) {
+        console.error(
+          "HOME AUTH CHECK ERROR:",
+          error
+        );
+
+        if (mounted) {
+          setIsLoggedIn(false);
+        }
       } finally {
         if (mounted) {
           setCheckingAuth(false);
         }
       }
-    };
+    }
 
-    checkAuth();
+    initializeAuth();
 
+    /*
+     * Login / Logout হলে Home page সঙ্গে সঙ্গে update হবে।
+     */
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange(
-      (_event, session) => {
+      (event, session) => {
         if (!mounted) return;
 
-        setIsLoggedIn(!!session);
-        setCheckingAuth(false);
+        /*
+         * INITIAL_SESSION, SIGNED_IN,
+         * SIGNED_OUT সব event handle করা হচ্ছে।
+         */
+        if (
+          event === "SIGNED_OUT"
+        ) {
+          setIsLoggedIn(false);
+          setCheckingAuth(false);
+          return;
+        }
+
+        if (
+          event === "SIGNED_IN" ||
+          event === "INITIAL_SESSION" ||
+          event === "TOKEN_REFRESHED" ||
+          event === "USER_UPDATED"
+        ) {
+          setIsLoggedIn(
+            !!session?.user
+          );
+
+          setCheckingAuth(false);
+        }
       }
     );
 
@@ -166,11 +212,19 @@ export default function Home() {
   useEffect(() => {
     let mounted = true;
 
-    const loadReferralStats = async () => {
+    async function loadReferralStats() {
+      /*
+       * Auth check শেষ না হওয়া পর্যন্ত referral RPC চালাব না।
+       */
+      if (checkingAuth) {
+        return;
+      }
+
       if (!isLoggedIn) {
         if (mounted) {
           setReferralCount(0);
           setReferralClaimed(false);
+          setLoadingReferral(false);
         }
 
         return;
@@ -179,8 +233,35 @@ export default function Home() {
       setLoadingReferral(true);
 
       try {
-        const { data, error } =
-          await supabase.rpc("get_referral_stats");
+        /*
+         * RPC চালানোর আগে নিশ্চিত করছি user session আছে।
+         */
+        const {
+          data: { user },
+          error: userError,
+        } = await supabase.auth.getUser();
+
+        if (!mounted) return;
+
+        if (userError || !user) {
+          console.error(
+            "REFERRAL USER ERROR:",
+            userError
+          );
+
+          setReferralCount(0);
+          setReferralClaimed(false);
+          setIsLoggedIn(false);
+
+          return;
+        }
+
+        const {
+          data,
+          error,
+        } = await supabase.rpc(
+          "get_referral_stats"
+        );
 
         if (!mounted) return;
 
@@ -201,11 +282,15 @@ export default function Home() {
           : data;
 
         setReferralCount(
-          Number(row?.valid_referrals ?? 0)
+          Number(
+            row?.valid_referrals ?? 0
+          )
         );
 
         setReferralClaimed(
-          Boolean(row?.already_claimed)
+          Boolean(
+            row?.already_claimed
+          )
         );
       } catch (error) {
         console.error(
@@ -222,14 +307,17 @@ export default function Home() {
           setLoadingReferral(false);
         }
       }
-    };
+    }
 
     loadReferralStats();
 
     return () => {
       mounted = false;
     };
-  }, [isLoggedIn]);
+  }, [
+    isLoggedIn,
+    checkingAuth,
+  ]);
 
   /* =====================================================
      DEPOSIT
@@ -250,6 +338,10 @@ export default function Home() {
   ===================================================== */
 
   const handleReferralClick = () => {
+    if (checkingAuth) {
+      return;
+    }
+
     if (!isLoggedIn) {
       router.push("/register");
       return;
@@ -274,9 +366,20 @@ export default function Home() {
     try {
       setLoadingReferral(true);
 
-      const { error } = await supabase.rpc(
-        "claim_referral_reward"
-      );
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+
+      if (!user) {
+        setIsLoggedIn(false);
+        router.push("/login");
+        return;
+      }
+
+      const { error } =
+        await supabase.rpc(
+          "claim_referral_reward"
+        );
 
       if (error) {
         console.error(
@@ -314,9 +417,7 @@ export default function Home() {
   return (
     <main className="min-h-screen bg-[#f7f9f8] pb-24 text-slate-900">
 
-      {/* =================================================
-          HEADER
-      ================================================= */}
+      {/* HEADER */}
 
       <header className="sticky top-0 z-50 border-b border-slate-200/70 bg-white/90 backdrop-blur-2xl">
         <div className="mx-auto flex max-w-6xl items-center justify-between px-4 py-3 sm:px-6">
@@ -326,11 +427,13 @@ export default function Home() {
             className="flex items-center gap-3"
           >
             <div className="relative flex h-10 w-10 items-center justify-center overflow-hidden rounded-[14px] bg-slate-950 shadow-lg">
+
               <div className="absolute -right-2 -top-2 h-7 w-7 rounded-full bg-green-400/30 blur-md" />
 
               <span className="relative text-lg font-black text-white">
                 P
               </span>
+
             </div>
 
             <div>
@@ -344,7 +447,9 @@ export default function Home() {
             </div>
           </Link>
 
-          {isLoggedIn ? (
+          {checkingAuth ? (
+            <div className="h-9 w-20 animate-pulse rounded-xl bg-slate-100" />
+          ) : isLoggedIn ? (
             <Link
               href="/profile"
               className="rounded-xl border border-green-200 bg-green-50 px-3.5 py-2 text-xs font-black text-green-700 transition hover:bg-green-100"
@@ -359,14 +464,13 @@ export default function Home() {
               Login
             </Link>
           )}
+
         </div>
       </header>
 
       <div className="mx-auto max-w-6xl px-4 sm:px-6">
 
-        {/* =================================================
-            TOP ACTIONS
-        ================================================= */}
+        {/* TOP ACTIONS */}
 
         <section className="mt-4 grid grid-cols-3 gap-2 sm:gap-3">
 
@@ -376,6 +480,7 @@ export default function Home() {
             disabled={checkingAuth}
             className="group flex h-[74px] items-center gap-2 rounded-2xl border border-slate-200 bg-white px-3 shadow-sm transition hover:border-green-200 hover:shadow-md active:scale-[0.98] disabled:cursor-wait disabled:opacity-60 sm:h-[82px] sm:justify-center sm:gap-3"
           >
+
             <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-green-50 text-lg font-black text-green-600 group-hover:bg-green-100">
               ＋
             </span>
@@ -389,12 +494,14 @@ export default function Home() {
                 ডিপোজিট
               </p>
             </div>
+
           </button>
 
           <Link
             href="/withdraw"
             className="group flex h-[74px] items-center gap-2 rounded-2xl border border-slate-200 bg-white px-3 shadow-sm transition hover:border-blue-200 hover:shadow-md active:scale-[0.98] sm:h-[82px] sm:justify-center sm:gap-3"
           >
+
             <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-blue-50 text-lg font-black text-blue-600">
               ↗
             </span>
@@ -408,12 +515,14 @@ export default function Home() {
                 উত্তোলন
               </p>
             </div>
+
           </Link>
 
           <Link
             href="/wallet"
             className="group flex h-[74px] items-center gap-2 rounded-2xl border border-slate-200 bg-white px-3 shadow-sm transition hover:border-purple-200 hover:shadow-md active:scale-[0.98] sm:h-[82px] sm:justify-center sm:gap-3"
           >
+
             <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-purple-50 text-base font-black text-purple-600">
               ৳
             </span>
@@ -427,13 +536,12 @@ export default function Home() {
                 ব্যালেন্স
               </p>
             </div>
+
           </Link>
 
         </section>
 
-        {/* =================================================
-            COMPACT DEPOSIT BONUS
-        ================================================= */}
+        {/* DEPOSIT BONUS */}
 
         <section className="relative mt-4 overflow-hidden rounded-[24px] bg-slate-950 shadow-[0_14px_40px_rgba(15,23,42,0.10)]">
 
@@ -446,20 +554,25 @@ export default function Home() {
             <div className="flex items-center justify-between gap-3">
 
               <div>
+
                 <div className="inline-flex items-center gap-1.5 rounded-full border border-green-400/20 bg-green-400/10 px-2.5 py-1">
+
                   <span className="h-1.5 w-1.5 rounded-full bg-green-400" />
 
                   <span className="text-[9px] font-black text-green-300">
                     বিশেষ অফার
                   </span>
+
                 </div>
 
                 <h2 className="mt-2 text-base font-black tracking-tight text-white sm:text-lg">
                   ডিপোজিট করুন, বোনাস পান
                 </h2>
+
               </div>
 
               <div className="hidden rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-right sm:block">
+
                 <p className="text-[8px] font-bold text-slate-500">
                   অতিরিক্ত
                 </p>
@@ -467,6 +580,7 @@ export default function Home() {
                 <p className="text-sm font-black text-green-400">
                   +৳৫০০
                 </p>
+
               </div>
 
             </div>
@@ -474,6 +588,7 @@ export default function Home() {
             <div className="mt-4 grid grid-cols-[1fr_auto_1fr] items-center gap-2">
 
               <div className="rounded-2xl border border-white/10 bg-white/[0.06] px-3 py-3 sm:px-4">
+
                 <p className="text-[8px] font-bold text-slate-500">
                   ডিপোজিট
                 </p>
@@ -481,6 +596,7 @@ export default function Home() {
                 <p className="mt-0.5 text-xl font-black text-white sm:text-2xl">
                   ৳২,০০০
                 </p>
+
               </div>
 
               <div className="flex h-8 w-8 items-center justify-center rounded-full bg-green-500 text-base font-black text-white shadow-lg shadow-green-900/30">
@@ -488,6 +604,7 @@ export default function Home() {
               </div>
 
               <div className="rounded-2xl border border-green-400/20 bg-green-500/10 px-3 py-3 sm:px-4">
+
                 <p className="text-[8px] font-bold text-green-300">
                   বোনাস
                 </p>
@@ -495,6 +612,7 @@ export default function Home() {
                 <p className="mt-0.5 text-xl font-black text-green-400 sm:text-2xl">
                   ৳৫০০
                 </p>
+
               </div>
 
             </div>
@@ -502,6 +620,7 @@ export default function Home() {
             <div className="mt-2 flex items-center justify-between rounded-2xl border border-white/10 bg-white/[0.04] px-3.5 py-2.5">
 
               <div>
+
                 <p className="text-[8px] font-bold text-slate-500">
                   মোট
                 </p>
@@ -509,6 +628,7 @@ export default function Home() {
                 <p className="text-base font-black text-white">
                   ৳২,৫০০
                 </p>
+
               </div>
 
               <button
@@ -517,12 +637,15 @@ export default function Home() {
                 disabled={checkingAuth}
                 className="rounded-xl bg-green-500 px-4 py-2.5 text-[10px] font-black text-white shadow-lg shadow-green-950/20 transition hover:bg-green-400 active:scale-[0.98] disabled:cursor-wait disabled:opacity-60 sm:px-5 sm:text-xs"
               >
+
                 {checkingAuth
                   ? "অপেক্ষা করুন..."
                   : "ডিপোজিট শুরু করুন"}
+
                 <span className="ml-1.5">
                   →
                 </span>
+
               </button>
 
             </div>
@@ -530,9 +653,7 @@ export default function Home() {
           </div>
         </section>
 
-        {/* =================================================
-            REFERRAL
-        ================================================= */}
+        {/* REFERRAL */}
 
         <section className="mt-4 overflow-hidden rounded-[24px] border border-green-100 bg-white shadow-sm">
 
@@ -541,6 +662,7 @@ export default function Home() {
             <div className="flex items-center justify-between gap-3">
 
               <div>
+
                 <span className="rounded-full bg-green-50 px-2.5 py-1 text-[8px] font-black text-green-700">
                   বিশেষ পুরস্কার
                 </span>
@@ -548,6 +670,7 @@ export default function Home() {
                 <h2 className="mt-2 text-base font-black tracking-tight text-slate-950 sm:text-lg">
                   বন্ধুদের আমন্ত্রণ করুন
                 </h2>
+
               </div>
 
               <div className="hidden h-10 w-10 items-center justify-center rounded-xl bg-green-50 text-base sm:flex">
@@ -559,18 +682,22 @@ export default function Home() {
             <div className="mt-4 rounded-2xl bg-slate-50 p-3.5">
 
               <div className="flex items-center justify-between">
+
                 <span className="text-[9px] font-bold text-slate-500">
                   বৈধ রেফারেল
                 </span>
 
                 <span className="text-xs font-black text-green-600">
-                  {loadingReferral
+                  {checkingAuth ||
+                  loadingReferral
                     ? "..."
                     : `${referralProgress}/${requiredReferrals}`}
                 </span>
+
               </div>
 
               <div className="mt-2 h-2 overflow-hidden rounded-full bg-slate-200">
+
                 <div
                   className="h-full rounded-full bg-gradient-to-r from-green-400 to-green-600 transition-all duration-500"
                   style={{
@@ -581,6 +708,7 @@ export default function Home() {
                     }%`,
                   }}
                 />
+
               </div>
 
             </div>
@@ -588,6 +716,7 @@ export default function Home() {
             <div className="mt-3 flex items-center justify-between gap-3">
 
               <div>
+
                 <p className="text-[8px] font-bold text-slate-400">
                   রেফারেল পুরস্কার
                 </p>
@@ -595,6 +724,7 @@ export default function Home() {
                 <p className="mt-0.5 text-xl font-black text-slate-950">
                   ৳১,০০০
                 </p>
+
               </div>
 
               {referralCompleted &&
@@ -602,7 +732,10 @@ export default function Home() {
                 <button
                   type="button"
                   onClick={handleClaim}
-                  disabled={loadingReferral}
+                  disabled={
+                    loadingReferral ||
+                    checkingAuth
+                  }
                   className="rounded-xl bg-green-600 px-4 py-2.5 text-[10px] font-black text-white shadow-sm transition hover:bg-green-700 disabled:cursor-wait disabled:opacity-60"
                 >
                   {loadingReferral
@@ -624,29 +757,33 @@ export default function Home() {
             <button
               type="button"
               onClick={handleReferralClick}
-              className="mt-3 flex w-full items-center justify-center rounded-xl border border-green-200 bg-green-50 px-4 py-2.5 text-[10px] font-black text-green-700 transition hover:bg-green-100"
+              disabled={checkingAuth}
+              className="mt-3 flex w-full items-center justify-center rounded-xl border border-green-200 bg-green-50 px-4 py-2.5 text-[10px] font-black text-green-700 transition hover:bg-green-100 disabled:cursor-wait disabled:opacity-60"
             >
-              {isLoggedIn
+
+              {checkingAuth
+                ? "অপেক্ষা করুন..."
+                : isLoggedIn
                 ? "বন্ধুদের আমন্ত্রণ করুন"
                 : "Registration করুন"}
 
               <span className="ml-1.5">
                 →
               </span>
+
             </button>
 
           </div>
         </section>
 
-        {/* =================================================
-            PACKAGES
-        ================================================= */}
+        {/* PACKAGES */}
 
         <section className="mt-7">
 
           <div className="flex items-end justify-between gap-3">
 
             <div>
+
               <p className="text-[9px] font-black tracking-[0.15em] text-green-600">
                 প্যাকেজ
               </p>
@@ -658,6 +795,7 @@ export default function Home() {
               <p className="mt-1 text-[10px] text-slate-500 sm:text-xs">
                 আপনার প্রয়োজন অনুযায়ী প্যাকেজ বেছে নিন।
               </p>
+
             </div>
 
             <Link
@@ -670,20 +808,22 @@ export default function Home() {
           </div>
 
           <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-            {packages.map((pkg, index) => (
-              <PackageCard
-                key={pkg.id}
-                pkg={pkg}
-                index={index}
-              />
-            ))}
+
+            {packages.map(
+              (pkg, index) => (
+                <PackageCard
+                  key={pkg.id}
+                  pkg={pkg}
+                  index={index}
+                />
+              )
+            )}
+
           </div>
 
         </section>
 
-        {/* =================================================
-            HOW IT WORKS
-        ================================================= */}
+        {/* HOW IT WORKS */}
 
         <section className="mt-7 rounded-[24px] border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
 
@@ -716,11 +856,10 @@ export default function Home() {
             />
 
           </div>
+
         </section>
 
-        {/* =================================================
-            NOTICE
-        ================================================= */}
+        {/* NOTICE */}
 
         <section className="mt-4 rounded-2xl border border-green-100 bg-green-50/80 p-3.5">
 
@@ -731,6 +870,7 @@ export default function Home() {
             </div>
 
             <div>
+
               <h3 className="text-[11px] font-black text-green-800">
                 পুরস্কার সংক্রান্ত তথ্য
               </h3>
@@ -739,17 +879,18 @@ export default function Home() {
                 পুরস্কার কাজ, যোগ্যতা, অনুমোদন ও সংশ্লিষ্ট
                 অফারের শর্তের ওপর নির্ভরশীল।
               </p>
+
             </div>
 
           </div>
+
         </section>
 
         <div className="h-4" />
+
       </div>
 
-      {/* =================================================
-          BOTTOM NAV
-      ================================================= */}
+      {/* BOTTOM NAV */}
 
       <nav className="fixed bottom-0 left-0 right-0 z-50 border-t border-slate-200/80 bg-white/90 backdrop-blur-2xl">
 
@@ -787,6 +928,7 @@ export default function Home() {
           />
 
         </div>
+
       </nav>
 
     </main>
@@ -808,7 +950,9 @@ function PackageCard({
     pkg.dailyEarning * pkg.duration;
 
   const theme =
-    packageThemes[index % packageThemes.length];
+    packageThemes[
+      index % packageThemes.length
+    ];
 
   return (
     <article className="group overflow-hidden rounded-[23px] border border-slate-200/80 bg-white shadow-sm transition duration-200 hover:-translate-y-1 hover:shadow-lg">
@@ -848,6 +992,7 @@ function PackageCard({
         <div className="relative mt-4 flex items-end justify-between">
 
           <div>
+
             <p className="text-[8px] font-bold text-slate-500">
               প্যাকেজ মূল্য
             </p>
@@ -860,6 +1005,7 @@ function PackageCard({
             >
               {taka(pkg.amount)}
             </h3>
+
           </div>
 
           <div
@@ -872,6 +1018,7 @@ function PackageCard({
           </div>
 
         </div>
+
       </div>
 
       <div className="p-3.5">
@@ -879,6 +1026,7 @@ function PackageCard({
         <div className="grid grid-cols-3 overflow-hidden rounded-2xl border border-slate-100 bg-slate-50">
 
           <div className="p-2.5">
+
             <p className="text-[7px] font-bold text-slate-400">
               দৈনিক
             </p>
@@ -891,9 +1039,11 @@ function PackageCard({
             >
               {taka(pkg.dailyEarning)}
             </p>
+
           </div>
 
           <div className="border-x border-slate-200 p-2.5">
+
             <p className="text-[7px] font-bold text-slate-400">
               মেয়াদ
             </p>
@@ -901,9 +1051,11 @@ function PackageCard({
             <p className="mt-1 text-xs font-black text-slate-800">
               {pkg.duration} দিন
             </p>
+
           </div>
 
           <div className="p-2.5">
+
             <p className="text-[7px] font-bold text-slate-400">
               মোট
             </p>
@@ -911,6 +1063,7 @@ function PackageCard({
             <p className="mt-1 text-xs font-black text-slate-800">
               {taka(totalEarning)}
             </p>
+
           </div>
 
         </div>
@@ -927,9 +1080,11 @@ function PackageCard({
           <span className="ml-1.5 text-sm">
             →
           </span>
+
         </Link>
 
       </div>
+
     </article>
   );
 }

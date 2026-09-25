@@ -1,12 +1,12 @@
 "use client";
 
-import Link from "next/link";
-import { FormEvent, useState } from "react";
-import { useRouter } from "next/navigation";
+import { Suspense, useEffect, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 
-export default function RegisterPage() {
+function RegisterForm() {
   const router = useRouter();
+  const searchParams = useSearchParams();
 
   const [fullName, setFullName] = useState("");
   const [username, setUsername] = useState("");
@@ -15,24 +15,33 @@ export default function RegisterPage() {
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
 
+  const [referralCode, setReferralCode] = useState("");
+
   const [loading, setLoading] = useState(false);
+  const [message, setMessage] = useState("");
   const [error, setError] = useState("");
-  const [success, setSuccess] = useState("");
 
-  async function handleRegister(
-    event: FormEvent<HTMLFormElement>
-  ) {
-    event.preventDefault();
+  useEffect(() => {
+    const ref = searchParams.get("ref");
 
-    if (loading) return;
+    if (ref) {
+      setReferralCode(ref.trim().toUpperCase());
+    }
+  }, [searchParams]);
+
+  const handleRegister = async (
+    e: React.FormEvent<HTMLFormElement>
+  ) => {
+    e.preventDefault();
 
     setError("");
-    setSuccess("");
+    setMessage("");
 
     const cleanFullName = fullName.trim();
     const cleanUsername = username.trim();
     const cleanPhone = phone.trim();
     const cleanEmail = email.trim().toLowerCase();
+    const cleanReferralCode = referralCode.trim().toUpperCase();
 
     if (
       !cleanFullName ||
@@ -42,7 +51,7 @@ export default function RegisterPage() {
       !password ||
       !confirmPassword
     ) {
-      setError("সবগুলো তথ্য পূরণ করুন।");
+      setError("সব তথ্য পূরণ করুন।");
       return;
     }
 
@@ -52,82 +61,69 @@ export default function RegisterPage() {
     }
 
     if (password !== confirmPassword) {
-      setError("দুইটি পাসওয়ার্ড একই নয়।");
+      setError("পাসওয়ার্ড এবং কনফার্ম পাসওয়ার্ড একই নয়।");
       return;
     }
 
-    const normalizedPhone = cleanPhone.replace(/\s+/g, "");
-
-    if (!/^01[3-9]\d{8}$/.test(normalizedPhone)) {
-      setError(
-        "সঠিক ১১ সংখ্যার বাংলাদেশি মোবাইল নম্বর দিন।"
-      );
+    if (!/^01[3-9]\d{8}$/.test(cleanPhone)) {
+      setError("সঠিক বাংলাদেশি মোবাইল নম্বর দিন।");
       return;
+    }
+
+    if (cleanReferralCode) {
+      if (!/^PM[A-Z0-9]{8}$/.test(cleanReferralCode)) {
+        setError("Referral code সঠিক নয়।");
+        return;
+      }
     }
 
     setLoading(true);
 
     try {
-      /*
-       * প্রথমে Supabase Auth account তৈরি করা হচ্ছে।
-       *
-       * Confirm Email OFF থাকলে confirmation email লাগবে না।
-       */
-      const {
-        data,
-        error: signUpError,
-      } = await supabase.auth.signUp({
-        email: cleanEmail,
-        password,
-        options: {
-          data: {
-            username: cleanUsername,
-            full_name: cleanFullName,
-            phone: normalizedPhone,
+      const { data, error: signUpError } =
+        await supabase.auth.signUp({
+          email: cleanEmail,
+          password,
+          options: {
+            data: {
+              username: cleanUsername,
+              full_name: cleanFullName,
+              phone: cleanPhone,
+            },
           },
-        },
-      });
+        });
 
       if (signUpError) {
-        const message =
-          signUpError.message.toLowerCase();
+        const errorMessage =
+          signUpError.message?.toLowerCase() || "";
 
         if (
-          message.includes("already registered") ||
-          message.includes("already exists") ||
-          message.includes("user already registered") ||
-          message.includes("email address is already registered") ||
-          message.includes("user with this email already exists")
+          errorMessage.includes("user already registered") ||
+          errorMessage.includes("already registered") ||
+          errorMessage.includes("already exists")
         ) {
           setError(
-            "এই Gmail দিয়ে আগে থেকেই একটি অ্যাকাউন্ট আছে। Login করুন।"
+            "এই Gmail দিয়ে ইতিমধ্যে account তৈরি করা আছে।"
           );
         } else if (
-          message.includes("rate limit") ||
-          message.includes("too many requests")
+          errorMessage.includes("rate limit") ||
+          errorMessage.includes("too many")
         ) {
           setError(
-            "অনেকবার চেষ্টা করা হয়েছে। কিছুক্ষণ পরে আবার চেষ্টা করুন।"
+            "অনেকবার চেষ্টা করা হয়েছে। কিছুক্ষণ পর আবার চেষ্টা করুন।"
           );
         } else if (
-          message.includes("invalid email")
+          errorMessage.includes("invalid email")
         ) {
-          setError("সঠিক Gmail / ইমেইল দিন।");
+          setError("সঠিক Gmail / Email দিন।");
         } else if (
-          message.includes("password")
+          errorMessage.includes("password")
         ) {
           setError(
-            "পাসওয়ার্ড কমপক্ষে ৬ অক্ষরের হতে হবে।"
+            "পাসওয়ার্ড সঠিক নয়। কমপক্ষে ৬ অক্ষরের পাসওয়ার্ড দিন।"
           );
         } else {
-          console.error(
-            "Supabase signup error:",
-            signUpError
-          );
-
-          setError(
-            "Registration করা যায়নি। তথ্যগুলো পরীক্ষা করে আবার চেষ্টা করুন।"
-          );
+          setError(signUpError.message);
         }
 
         return;
@@ -135,263 +131,312 @@ export default function RegisterPage() {
 
       if (!data.user) {
         setError(
-          "অ্যাকাউন্ট তৈরি করা যায়নি। আবার চেষ্টা করুন।"
+          "Registration সম্পন্ন হয়নি। আবার চেষ্টা করুন।"
         );
         return;
       }
 
       /*
-       * Auth account তৈরি হওয়ার পর profile trigger
-       * metadata থেকে profile তৈরি করবে।
+       * Referral registration
        *
-       * এখানে profiles table SELECT করা হচ্ছে না।
-       * তাই নতুন logged-out user-এর RLS-এর কারণে
-       * Registration আটকে যাবে না।
+       * এখানে referral record তৈরি হবে।
+       * তবে শুধু registration করলেই referral valid হবে না।
+       * User package active করলে database logic অনুযায়ী
+       * referral valid হবে।
        */
+      if (cleanReferralCode) {
+        const { error: referralError } =
+          await supabase.rpc(
+            "create_referral_for_new_user",
+            {
+              p_new_user_id: data.user.id,
+              p_referral_code: cleanReferralCode,
+            }
+          );
+
+        if (referralError) {
+          console.error(
+            "REFERRAL CREATE ERROR:",
+            referralError
+          );
+        }
+      }
 
       /*
-       * Registration-এর পর automatic login চাই না।
-       * তাই session clear করছি।
+       * Registration-এর পর user-কে automatically logged-in
+       * অবস্থায় না রেখে Login page-এ পাঠানো হচ্ছে।
        */
       await supabase.auth.signOut();
 
-      setSuccess(
-        "Registration সফল হয়েছে। এখন Login করুন।"
-      );
+      if (cleanReferralCode) {
+        setMessage(
+          "Registration সফল হয়েছে। Referral সংযুক্ত হয়েছে। এখন Login করুন।"
+        );
+      } else {
+        setMessage(
+          "Registration সফল হয়েছে। এখন Login করুন।"
+        );
+      }
 
       setTimeout(() => {
-        router.replace("/login");
-        router.refresh();
+        router.push("/login");
       }, 1000);
-    } catch (error) {
-      console.error(
-        "Registration error:",
-        error
-      );
+    } catch (err) {
+      console.error("REGISTRATION ERROR:", err);
 
       setError(
-        "কিছু সমস্যা হয়েছে। আবার চেষ্টা করুন।"
+        "Registration করার সময় একটি সমস্যা হয়েছে। আবার চেষ্টা করুন।"
       );
     } finally {
       setLoading(false);
     }
-  }
+  };
 
   return (
-    <main className="min-h-screen bg-[#f7faf7] px-4 py-8">
-      <div className="mx-auto flex min-h-[calc(100vh-4rem)] w-full max-w-md items-center">
-        <div className="w-full">
+    <main className="min-h-screen bg-gradient-to-br from-green-50 via-white to-emerald-50 px-4 py-8">
+      <div className="mx-auto flex min-h-[calc(100vh-4rem)] max-w-md items-center">
+        <div className="w-full rounded-3xl bg-white p-6 shadow-xl ring-1 ring-green-100 sm:p-8">
+          {/* Header */}
+          <div className="mb-7 text-center">
+            <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-green-600 text-2xl font-black text-white shadow-lg">
+              ৳
+            </div>
 
-          {/* Brand */}
-          <div className="mb-8 text-center">
-            <Link
-              href="/register"
-              className="inline-flex items-center justify-center"
-            >
-              <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-[#7ed957] shadow-lg shadow-green-100">
-                <span className="text-2xl font-black text-white">
-                  P
-                </span>
-              </div>
-            </Link>
-
-            <h1 className="mt-5 text-3xl font-black tracking-tight text-gray-900">
+            <h1 className="text-2xl font-black text-gray-900">
               Registration
             </h1>
 
             <p className="mt-2 text-sm text-gray-500">
-              Pocket Money-তে আপনার অ্যাকাউন্ট তৈরি করুন
+              নতুন account তৈরি করুন
             </p>
           </div>
 
-          {/* Card */}
-          <div className="rounded-3xl border border-gray-100 bg-white p-5 shadow-[0_15px_50px_rgba(0,0,0,0.06)] sm:p-7">
-
-            {/* Error */}
-            {error && (
-              <div className="mb-5 rounded-2xl border border-red-100 bg-red-50 px-4 py-3 text-sm font-medium leading-5 text-red-600">
-                {error}
-              </div>
-            )}
-
-            {/* Success */}
-            {success && (
-              <div className="mb-5 rounded-2xl border border-green-100 bg-green-50 px-4 py-3 text-sm font-medium leading-5 text-green-700">
-                {success}
-              </div>
-            )}
-
-            <form
-              onSubmit={handleRegister}
-              className="space-y-4"
-            >
-
-              {/* Full Name */}
-              <div>
-                <label className="mb-2 block text-sm font-semibold text-gray-700">
-                  পূর্ণ নাম
-                </label>
-
-                <input
-                  type="text"
-                  value={fullName}
-                  onChange={(event) =>
-                    setFullName(event.target.value)
-                  }
-                  placeholder="আপনার পূর্ণ নাম দিন"
-                  autoComplete="name"
-                  disabled={loading}
-                  className="h-12 w-full rounded-2xl border border-gray-200 bg-gray-50 px-4 text-sm outline-none transition focus:border-[#7ed957] focus:bg-white focus:ring-4 focus:ring-green-50 disabled:opacity-60"
-                />
-              </div>
-
-              {/* Username */}
-              <div>
-                <label className="mb-2 block text-sm font-semibold text-gray-700">
-                  ইউজারনেম
-                </label>
-
-                <input
-                  type="text"
-                  value={username}
-                  onChange={(event) =>
-                    setUsername(event.target.value)
-                  }
-                  placeholder="একটি ইউজারনেম দিন"
-                  autoComplete="username"
-                  disabled={loading}
-                  className="h-12 w-full rounded-2xl border border-gray-200 bg-gray-50 px-4 text-sm outline-none transition focus:border-[#7ed957] focus:bg-white focus:ring-4 focus:ring-green-50 disabled:opacity-60"
-                />
-              </div>
-
-              {/* Phone */}
-              <div>
-                <label className="mb-2 block text-sm font-semibold text-gray-700">
-                  মোবাইল নম্বর
-                </label>
-
-                <input
-                  type="tel"
-                  inputMode="numeric"
-                  value={phone}
-                  onChange={(event) =>
-                    setPhone(event.target.value)
-                  }
-                  placeholder="01XXXXXXXXX"
-                  autoComplete="tel"
-                  disabled={loading}
-                  className="h-12 w-full rounded-2xl border border-gray-200 bg-gray-50 px-4 text-sm outline-none transition focus:border-[#7ed957] focus:bg-white focus:ring-4 focus:ring-green-50 disabled:opacity-60"
-                />
-
-                <p className="mt-1.5 text-xs text-gray-400">
-                  একটি মোবাইল নম্বর দিয়ে একটি অ্যাকাউন্ট করা যাবে।
-                </p>
-              </div>
-
-              {/* Email */}
-              <div>
-                <label className="mb-2 block text-sm font-semibold text-gray-700">
-                  Gmail / ইমেইল
-                </label>
-
-                <input
-                  type="email"
-                  value={email}
-                  onChange={(event) =>
-                    setEmail(event.target.value)
-                  }
-                  placeholder="আপনার Gmail দিন"
-                  autoComplete="email"
-                  disabled={loading}
-                  className="h-12 w-full rounded-2xl border border-gray-200 bg-gray-50 px-4 text-sm outline-none transition focus:border-[#7ed957] focus:bg-white focus:ring-4 focus:ring-green-50 disabled:opacity-60"
-                />
-
-                <p className="mt-1.5 text-xs text-gray-400">
-                  একটি Gmail দিয়ে একটি অ্যাকাউন্ট করা যাবে।
-                </p>
-              </div>
-
-              {/* Password */}
-              <div>
-                <label className="mb-2 block text-sm font-semibold text-gray-700">
-                  পাসওয়ার্ড
-                </label>
-
-                <input
-                  type="password"
-                  value={password}
-                  onChange={(event) =>
-                    setPassword(event.target.value)
-                  }
-                  placeholder="একটি পাসওয়ার্ড তৈরি করুন"
-                  autoComplete="new-password"
-                  disabled={loading}
-                  className="h-12 w-full rounded-2xl border border-gray-200 bg-gray-50 px-4 text-sm outline-none transition focus:border-[#7ed957] focus:bg-white focus:ring-4 focus:ring-green-50 disabled:opacity-60"
-                />
-
-                <p className="mt-1.5 text-xs text-gray-400">
-                  কমপক্ষে ৬ অক্ষর।
-                </p>
-              </div>
-
-              {/* Confirm Password */}
-              <div>
-                <label className="mb-2 block text-sm font-semibold text-gray-700">
-                  পাসওয়ার্ড নিশ্চিত করুন
-                </label>
-
-                <input
-                  type="password"
-                  value={confirmPassword}
-                  onChange={(event) =>
-                    setConfirmPassword(event.target.value)
-                  }
-                  placeholder="আবার পাসওয়ার্ড দিন"
-                  autoComplete="new-password"
-                  disabled={loading}
-                  className="h-12 w-full rounded-2xl border border-gray-200 bg-gray-50 px-4 text-sm outline-none transition focus:border-[#7ed957] focus:bg-white focus:ring-4 focus:ring-green-50 disabled:opacity-60"
-                />
-              </div>
-
-              {/* Submit */}
-              <button
-                type="submit"
-                disabled={loading}
-                className="mt-2 flex h-13 w-full items-center justify-center rounded-2xl bg-[#7ed957] px-5 text-sm font-bold text-white shadow-lg shadow-green-100 transition hover:bg-[#70ca4c] active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                {loading
-                  ? "Registration হচ্ছে..."
-                  : "Registration"}
-              </button>
-            </form>
-
-            {/* Login */}
-            <div className="mt-7 border-t border-gray-100 pt-6 text-center">
-              <p className="text-sm text-gray-500">
-                আগে থেকেই অ্যাকাউন্ট আছে?
+          {/* Referral notice */}
+          {referralCode && (
+            <div className="mb-5 rounded-2xl border border-green-200 bg-green-50 p-4">
+              <p className="text-sm font-bold text-green-800">
+                Referral সংযুক্ত আছে
               </p>
 
-              <Link
-                href="/login"
-                className="mt-2 inline-block text-sm font-bold text-[#4f9d32] hover:underline"
-              >
-                Login
-              </Link>
+              <p className="mt-1 break-all text-sm font-black text-green-700">
+                {referralCode}
+              </p>
+
+              <p className="mt-1 text-xs text-green-700">
+                Package Active করলে referral count হবে।
+              </p>
             </div>
-          </div>
+          )}
 
-          {/* Bottom */}
-          <div className="mt-6 text-center">
-            <Link
-              href="/register"
-              className="text-sm font-medium text-gray-500 hover:text-gray-800"
+          {/* Error */}
+          {error && (
+            <div className="mb-5 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-700">
+              {error}
+            </div>
+          )}
+
+          {/* Success */}
+          {message && (
+            <div className="mb-5 rounded-2xl border border-green-200 bg-green-50 px-4 py-3 text-sm font-medium text-green-700">
+              {message}
+            </div>
+          )}
+
+          <form
+            onSubmit={handleRegister}
+            className="space-y-4"
+          >
+            {/* Full Name */}
+            <div>
+              <label className="mb-2 block text-sm font-bold text-gray-700">
+                পূর্ণ নাম
+              </label>
+
+              <input
+                type="text"
+                value={fullName}
+                onChange={(e) =>
+                  setFullName(e.target.value)
+                }
+                placeholder="আপনার পূর্ণ নাম"
+                autoComplete="name"
+                className="w-full rounded-2xl border border-gray-200 bg-gray-50 px-4 py-3.5 text-sm outline-none transition focus:border-green-500 focus:bg-white focus:ring-4 focus:ring-green-100"
+                disabled={loading}
+              />
+            </div>
+
+            {/* Username */}
+            <div>
+              <label className="mb-2 block text-sm font-bold text-gray-700">
+                ইউজারনেম
+              </label>
+
+              <input
+                type="text"
+                value={username}
+                onChange={(e) =>
+                  setUsername(e.target.value)
+                }
+                placeholder="আপনার ইউজারনেম"
+                autoComplete="username"
+                className="w-full rounded-2xl border border-gray-200 bg-gray-50 px-4 py-3.5 text-sm outline-none transition focus:border-green-500 focus:bg-white focus:ring-4 focus:ring-green-100"
+                disabled={loading}
+              />
+            </div>
+
+            {/* Phone */}
+            <div>
+              <label className="mb-2 block text-sm font-bold text-gray-700">
+                মোবাইল নম্বর
+              </label>
+
+              <input
+                type="tel"
+                value={phone}
+                onChange={(e) =>
+                  setPhone(e.target.value.replace(/\D/g, ""))
+                }
+                placeholder="01XXXXXXXXX"
+                autoComplete="tel"
+                inputMode="numeric"
+                maxLength={11}
+                className="w-full rounded-2xl border border-gray-200 bg-gray-50 px-4 py-3.5 text-sm outline-none transition focus:border-green-500 focus:bg-white focus:ring-4 focus:ring-green-100"
+                disabled={loading}
+              />
+            </div>
+
+            {/* Email */}
+            <div>
+              <label className="mb-2 block text-sm font-bold text-gray-700">
+                Gmail / Email
+              </label>
+
+              <input
+                type="email"
+                value={email}
+                onChange={(e) =>
+                  setEmail(e.target.value)
+                }
+                placeholder="example@gmail.com"
+                autoComplete="email"
+                className="w-full rounded-2xl border border-gray-200 bg-gray-50 px-4 py-3.5 text-sm outline-none transition focus:border-green-500 focus:bg-white focus:ring-4 focus:ring-green-100"
+                disabled={loading}
+              />
+            </div>
+
+            {/* Password */}
+            <div>
+              <label className="mb-2 block text-sm font-bold text-gray-700">
+                পাসওয়ার্ড
+              </label>
+
+              <input
+                type="password"
+                value={password}
+                onChange={(e) =>
+                  setPassword(e.target.value)
+                }
+                placeholder="কমপক্ষে ৬ অক্ষর"
+                autoComplete="new-password"
+                className="w-full rounded-2xl border border-gray-200 bg-gray-50 px-4 py-3.5 text-sm outline-none transition focus:border-green-500 focus:bg-white focus:ring-4 focus:ring-green-100"
+                disabled={loading}
+              />
+            </div>
+
+            {/* Confirm Password */}
+            <div>
+              <label className="mb-2 block text-sm font-bold text-gray-700">
+                পাসওয়ার্ড নিশ্চিত করুন
+              </label>
+
+              <input
+                type="password"
+                value={confirmPassword}
+                onChange={(e) =>
+                  setConfirmPassword(e.target.value)
+                }
+                placeholder="পাসওয়ার্ড আবার লিখুন"
+                autoComplete="new-password"
+                className="w-full rounded-2xl border border-gray-200 bg-gray-50 px-4 py-3.5 text-sm outline-none transition focus:border-green-500 focus:bg-white focus:ring-4 focus:ring-green-100"
+                disabled={loading}
+              />
+            </div>
+
+            {/* Referral */}
+            <div>
+              <label className="mb-2 block text-sm font-bold text-gray-700">
+                Referral Code
+                <span className="ml-1 font-normal text-gray-400">
+                  (ঐচ্ছিক)
+                </span>
+              </label>
+
+              <input
+                type="text"
+                value={referralCode}
+                onChange={(e) =>
+                  setReferralCode(
+                    e.target.value.toUpperCase()
+                  )
+                }
+                placeholder="PMXXXXXXXX"
+                maxLength={10}
+                className="w-full rounded-2xl border border-gray-200 bg-gray-50 px-4 py-3.5 text-sm uppercase outline-none transition focus:border-green-500 focus:bg-white focus:ring-4 focus:ring-green-100"
+                disabled={loading}
+              />
+
+              <p className="mt-1.5 text-xs text-gray-400">
+                Referral link থেকে এলে এটি automatically পূরণ হবে।
+              </p>
+            </div>
+
+            {/* Submit */}
+            <button
+              type="submit"
+              disabled={loading}
+              className="mt-2 w-full rounded-2xl bg-green-600 px-4 py-4 text-sm font-black text-white shadow-lg shadow-green-200 transition hover:bg-green-700 active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-60"
             >
-              ← Registration পেজে থাকুন
-            </Link>
-          </div>
+              {loading
+                ? "Registration হচ্ছে..."
+                : "Registration"}
+            </button>
+          </form>
 
+          {/* Login */}
+          <div className="mt-6 text-center">
+            <p className="text-sm text-gray-500">
+              আগে থেকেই account আছে?
+            </p>
+
+            <button
+              type="button"
+              onClick={() => router.push("/login")}
+              className="mt-2 font-black text-green-600 hover:text-green-700"
+            >
+              Login
+            </button>
+          </div>
         </div>
       </div>
     </main>
+  );
+}
+
+export default function RegisterPage() {
+  return (
+    <Suspense
+      fallback={
+        <main className="flex min-h-screen items-center justify-center bg-gradient-to-br from-green-50 via-white to-emerald-50 px-4">
+          <div className="rounded-2xl bg-white px-6 py-5 text-center shadow-lg">
+            <div className="mx-auto mb-3 h-8 w-8 animate-spin rounded-full border-4 border-green-200 border-t-green-600" />
+            <p className="text-sm font-bold text-gray-600">
+              লোড হচ্ছে...
+            </p>
+          </div>
+        </main>
+      }
+    >
+      <RegisterForm />
+    </Suspense>
   );
 }
