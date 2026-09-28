@@ -45,9 +45,13 @@ type PackageImage = {
 };
 
 type PackageItem = {
+  id?: string;
+
   package_amount: number;
   packageAmount: number;
 
+  daily_reward: number;
+  duration_days: number;
   active: boolean;
 
   activeUsers: number;
@@ -171,9 +175,23 @@ function normalizePackage(
   );
 
   return {
+    id:
+      typeof item.id === "string"
+        ? item.id
+        : undefined,
+
     package_amount: amount,
 
     packageAmount: amount,
+
+    daily_reward: safeNumber(
+      item.daily_reward
+    ),
+
+    duration_days:
+      safeNumber(
+        item.duration_days
+      ) || 30,
 
     active:
       item.active === true,
@@ -271,6 +289,33 @@ export default function PackagesPage() {
   ] = useState<PackageItem | null>(
     null
   );
+
+  const [
+    editPackage,
+    setEditPackage,
+  ] = useState<PackageItem | null>(
+    null
+  );
+
+  const [
+    editAmount,
+    setEditAmount,
+  ] = useState("");
+
+  const [
+    editDailyReward,
+    setEditDailyReward,
+  ] = useState("");
+
+  const [
+    editDuration,
+    setEditDuration,
+  ] = useState("30");
+
+  const [
+    editActive,
+    setEditActive,
+  ] = useState(true);
 
   const [
     amount,
@@ -372,6 +417,172 @@ export default function PackagesPage() {
     setAmount("");
     setImageUrl("");
     setStoragePath("");
+  }
+
+  function openEditPackage(
+    item: PackageItem
+  ) {
+    setError("");
+    setSuccess("");
+
+    setEditPackage(item);
+
+    setEditAmount(
+      String(item.package_amount)
+    );
+
+    setEditDailyReward(
+      String(item.daily_reward)
+    );
+
+    setEditDuration(
+      String(
+        item.duration_days || 30
+      )
+    );
+
+    setEditActive(
+      item.active
+    );
+  }
+
+  function closeEditPackage() {
+    if (saving) {
+      return;
+    }
+
+    setEditPackage(null);
+  }
+
+  async function savePackage() {
+    if (!editPackage) {
+      return;
+    }
+
+    const packageAmount =
+      Number(editAmount);
+
+    const dailyReward =
+      Number(editDailyReward);
+
+    const durationDays =
+      Number(editDuration);
+
+    if (
+      !Number.isFinite(
+        packageAmount
+      ) ||
+      packageAmount <= 0
+    ) {
+      setError(
+        "Enter a valid package price."
+      );
+      return;
+    }
+
+    if (
+      !Number.isFinite(
+        dailyReward
+      ) ||
+      dailyReward < 0
+    ) {
+      setError(
+        "Enter a valid daily reward."
+      );
+      return;
+    }
+
+    if (
+      !Number.isFinite(
+        durationDays
+      ) ||
+      durationDays <= 0
+    ) {
+      setError(
+        "Enter a valid duration."
+      );
+      return;
+    }
+
+    try {
+      setSaving(true);
+      setError("");
+      setSuccess("");
+
+      const response =
+        await fetch(
+          "/api/admin/packages",
+          {
+            method: "PATCH",
+            headers: {
+              "Content-Type":
+                "application/json",
+            },
+            body: JSON.stringify({
+              type: "package",
+
+              package_id:
+                editPackage.id || null,
+
+              package_amount:
+                editPackage.package_amount,
+
+              new_package_amount:
+                packageAmount,
+
+              daily_reward:
+                dailyReward,
+
+              duration_days:
+                durationDays,
+
+              is_active:
+                editActive,
+            }),
+          }
+        );
+
+      const data =
+        await response.json();
+
+      if (!response.ok) {
+        throw new Error(
+          data?.error ||
+            "Failed to update package."
+        );
+      }
+
+      setSuccess(
+        `${money(
+          packageAmount
+        )} package updated successfully.`
+      );
+
+      setEditPackage(null);
+
+      await loadPackages();
+
+      if (
+        selected &&
+        selected.package_amount ===
+          editPackage.package_amount
+      ) {
+        setSelected(null);
+      }
+    } catch (err) {
+      console.error(
+        "Update package error:",
+        err
+      );
+
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Failed to update package."
+      );
+    } finally {
+      setSaving(false);
+    }
   }
 
   async function addPackage() {
@@ -523,7 +734,7 @@ export default function PackagesPage() {
   return (
     <AdminShell
       title="Packages"
-      description="Manage package amounts, package images and active package users."
+      description="Manage package amounts, daily rewards, package images and active package users."
     >
       <div className="space-y-6">
         {/* Header */}
@@ -703,6 +914,11 @@ export default function PackagesPage() {
                       item
                     )
                   }
+                  onEdit={() =>
+                    openEditPackage(
+                      item
+                    )
+                  }
                 />
               )
             )}
@@ -710,7 +926,7 @@ export default function PackagesPage() {
         )}
       </div>
 
-      {/* Add Package Modal */}
+      {/* Add Package Image Modal */}
       {showAdd && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/55 p-4 backdrop-blur-sm">
           <div className="w-full max-w-lg rounded-3xl bg-white shadow-2xl">
@@ -809,6 +1025,201 @@ export default function PackagesPage() {
         </div>
       )}
 
+      {/* Edit Package Modal */}
+      {editPackage && (
+        <div className="fixed inset-0 z-[110] flex items-center justify-center bg-black/55 p-4 backdrop-blur-sm">
+          <div className="w-full max-w-lg rounded-3xl bg-white shadow-2xl">
+            <div className="flex items-center justify-between border-b border-black/[0.06] px-6 py-5">
+              <div>
+                <p className="text-xs font-black uppercase tracking-widest text-black/35">
+                  Package Management
+                </p>
+
+                <h2 className="mt-1 text-xl font-black text-black">
+                  Edit Package
+                </h2>
+              </div>
+
+              <button
+                type="button"
+                onClick={
+                  closeEditPackage
+                }
+                disabled={saving}
+                className="flex h-10 w-10 items-center justify-center rounded-xl bg-black/[0.05] text-xl font-bold text-black/60 hover:bg-black/10 disabled:opacity-50"
+              >
+                ×
+              </button>
+            </div>
+
+            <div className="space-y-5 p-6">
+              <div className="rounded-2xl bg-[#f7f9f7] p-4">
+                <p className="text-[11px] font-black uppercase tracking-wider text-black/35">
+                  Current Package
+                </p>
+
+                <p className="mt-1 text-2xl font-black text-black">
+                  {money(
+                    editPackage.package_amount
+                  )}
+                </p>
+
+                <p className="mt-1 text-xs font-semibold text-black/35">
+                  Current Daily Reward:{" "}
+                  {money(
+                    editPackage.daily_reward
+                  )}
+                </p>
+              </div>
+
+              <Field
+                label="Package Price"
+                placeholder="Example: 5000"
+                value={editAmount}
+                onChange={
+                  setEditAmount
+                }
+                type="number"
+              />
+
+              <Field
+                label="Daily Reward"
+                placeholder="Example: 1000"
+                value={
+                  editDailyReward
+                }
+                onChange={
+                  setEditDailyReward
+                }
+                type="number"
+              />
+
+              <Field
+                label="Duration Days"
+                placeholder="Example: 30"
+                value={editDuration}
+                onChange={
+                  setEditDuration
+                }
+                type="number"
+              />
+
+              <div className="rounded-2xl border border-black/[0.07] bg-[#f8faf8] p-4">
+                <div className="flex items-center justify-between gap-4">
+                  <div>
+                    <p className="text-sm font-black text-black">
+                      Package Active
+                    </p>
+
+                    <p className="mt-1 text-xs font-semibold text-black/40">
+                      User side package list-এ packageটি দেখাবে কি না।
+                    </p>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setEditActive(
+                        (value) =>
+                          !value
+                      )
+                    }
+                    className={`relative h-7 w-12 rounded-full transition ${
+                      editActive
+                        ? "bg-[#4f9d32]"
+                        : "bg-black/15"
+                    }`}
+                  >
+                    <span
+                      className={`absolute top-1 h-5 w-5 rounded-full bg-white shadow transition ${
+                        editActive
+                          ? "left-6"
+                          : "left-1"
+                      }`}
+                    />
+                  </button>
+                </div>
+              </div>
+
+              <div className="rounded-2xl border border-blue-100 bg-blue-50 p-4">
+                <p className="text-xs font-black text-blue-700">
+                  New Package Summary
+                </p>
+
+                <div className="mt-3 grid grid-cols-3 gap-2">
+                  <div className="rounded-xl bg-white/80 p-3">
+                    <p className="text-[10px] font-black uppercase text-black/30">
+                      Price
+                    </p>
+
+                    <p className="mt-1 text-sm font-black text-black">
+                      {money(
+                        editAmount
+                      )}
+                    </p>
+                  </div>
+
+                  <div className="rounded-xl bg-white/80 p-3">
+                    <p className="text-[10px] font-black uppercase text-black/30">
+                      Daily
+                    </p>
+
+                    <p className="mt-1 text-sm font-black text-black">
+                      {money(
+                        editDailyReward
+                      )}
+                    </p>
+                  </div>
+
+                  <div className="rounded-xl bg-white/80 p-3">
+                    <p className="text-[10px] font-black uppercase text-black/30">
+                      Total
+                    </p>
+
+                    <p className="mt-1 text-sm font-black text-black">
+                      {money(
+                        safeNumber(
+                          editDailyReward
+                        ) *
+                          safeNumber(
+                            editDuration
+                          )
+                      )}
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
+                <button
+                  type="button"
+                  onClick={
+                    closeEditPackage
+                  }
+                  disabled={saving}
+                  className="h-11 rounded-xl border border-black/10 px-5 text-sm font-black text-black/60 disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+
+                <button
+                  type="button"
+                  onClick={
+                    savePackage
+                  }
+                  disabled={saving}
+                  className="h-11 rounded-xl bg-[#4f9d32] px-5 text-sm font-black text-white disabled:opacity-50"
+                >
+                  {saving
+                    ? "Saving..."
+                    : "Save Changes"}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Package Details Modal */}
       {selected && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/55 p-4 backdrop-blur-sm">
@@ -819,11 +1230,27 @@ export default function PackagesPage() {
                   Package Details
                 </p>
 
-                <h2 className="mt-1 text-2xl font-black text-black">
-                  {money(
-                    selected.package_amount
-                  )}
-                </h2>
+                <div className="mt-1 flex flex-wrap items-center gap-3">
+                  <h2 className="text-2xl font-black text-black">
+                    {money(
+                      selected.package_amount
+                    )}
+                  </h2>
+
+                  <span className="rounded-full bg-emerald-50 px-3 py-1 text-xs font-black text-emerald-700">
+                    Daily{" "}
+                    {money(
+                      selected.daily_reward
+                    )}
+                  </span>
+
+                  <span className="rounded-full bg-blue-50 px-3 py-1 text-xs font-black text-blue-700">
+                    {safeNumber(
+                      selected.duration_days
+                    )}{" "}
+                    Days
+                  </span>
+                </div>
               </div>
 
               <button
@@ -838,6 +1265,64 @@ export default function PackagesPage() {
             </div>
 
             <div className="space-y-6 p-6">
+              {/* Package master info */}
+              <div className="rounded-2xl border border-black/[0.06] bg-[#f8faf8] p-4">
+                <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                  <div>
+                    <p className="text-xs font-black uppercase tracking-wider text-black/30">
+                      Package Configuration
+                    </p>
+
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      <span className="rounded-xl bg-white px-3 py-2 text-xs font-black text-black/60">
+                        Price:{" "}
+                        {money(
+                          selected.package_amount
+                        )}
+                      </span>
+
+                      <span className="rounded-xl bg-white px-3 py-2 text-xs font-black text-black/60">
+                        Daily:{" "}
+                        {money(
+                          selected.daily_reward
+                        )}
+                      </span>
+
+                      <span className="rounded-xl bg-white px-3 py-2 text-xs font-black text-black/60">
+                        Duration:{" "}
+                        {safeNumber(
+                          selected.duration_days
+                        )}{" "}
+                        days
+                      </span>
+
+                      <span className="rounded-xl bg-white px-3 py-2 text-xs font-black text-black/60">
+                        Total:{" "}
+                        {money(
+                          selected.daily_reward *
+                            selected.duration_days
+                        )}
+                      </span>
+                    </div>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSelected(
+                        null
+                      );
+                      openEditPackage(
+                        selected
+                      );
+                    }}
+                    className="shrink-0 rounded-xl bg-black px-4 py-2.5 text-xs font-black text-white transition hover:bg-black/80"
+                  >
+                    Edit Package
+                  </button>
+                </div>
+              </div>
+
               {/* Package stats */}
               <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
                 <DetailCard
@@ -1071,12 +1556,6 @@ export default function PackagesPage() {
                 ) : null}
 
                 <div className="mt-3 overflow-hidden rounded-2xl border border-black/[0.07]">
-                  {/*
-                    The API response currently contains package
-                    activation counts and latest activation.
-                    Individual activation rows are not returned
-                    by the current package API.
-                  */}
                   <div className="bg-[#f8faf8] px-5 py-6 text-center">
                     {selected.totalUsers >
                     0 ? (
@@ -1210,9 +1689,11 @@ function InfoCard({
 function PackageCard({
   item,
   onView,
+  onEdit,
 }: {
   item: PackageItem;
   onView: () => void;
+  onEdit: () => void;
 }) {
   const primaryImage =
     item.images?.[0]?.image_url ||
@@ -1253,7 +1734,34 @@ function PackageCard({
       </div>
 
       <div className="p-5">
+        {/* Price + Daily Reward */}
         <div className="grid grid-cols-2 gap-3">
+          <div className="rounded-xl bg-[#f7f9f7] p-3">
+            <p className="text-[11px] font-black uppercase tracking-wider text-black/30">
+              Package Price
+            </p>
+
+            <p className="mt-1 text-lg font-black text-black">
+              {money(
+                item.package_amount
+              )}
+            </p>
+          </div>
+
+          <div className="rounded-xl bg-emerald-50 p-3">
+            <p className="text-[11px] font-black uppercase tracking-wider text-emerald-700/60">
+              Daily Reward
+            </p>
+
+            <p className="mt-1 text-lg font-black text-emerald-700">
+              {money(
+                item.daily_reward
+              )}
+            </p>
+          </div>
+        </div>
+
+        <div className="mt-3 grid grid-cols-2 gap-3">
           <MiniStat
             label="Active Users"
             value={
@@ -1286,6 +1794,34 @@ function PackageCard({
         <div className="mt-4 grid grid-cols-2 gap-3">
           <div className="rounded-xl bg-[#f7f9f7] p-3">
             <p className="text-[11px] font-black uppercase tracking-wider text-black/30">
+              Duration
+            </p>
+
+            <p className="mt-1 text-lg font-black text-black">
+              {safeNumber(
+                item.duration_days
+              )}{" "}
+              days
+            </p>
+          </div>
+
+          <div className="rounded-xl bg-[#f7f9f7] p-3">
+            <p className="text-[11px] font-black uppercase tracking-wider text-black/30">
+              Total Earning
+            </p>
+
+            <p className="mt-1 text-lg font-black text-black">
+              {money(
+                item.daily_reward *
+                  item.duration_days
+              )}
+            </p>
+          </div>
+        </div>
+
+        <div className="mt-4 grid grid-cols-2 gap-3">
+          <div className="rounded-xl bg-[#f7f9f7] p-3">
+            <p className="text-[11px] font-black uppercase tracking-wider text-black/30">
               Images
             </p>
 
@@ -1309,7 +1845,7 @@ function PackageCard({
           </div>
         </div>
 
-        <div className="mt-4 flex items-center justify-between">
+        <div className="mt-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
           <p className="text-xs font-bold text-black/35">
             {formatNumber(
               item.inactiveUsers
@@ -1317,13 +1853,23 @@ function PackageCard({
             inactive users
           </p>
 
-          <button
-            type="button"
-            onClick={onView}
-            className="rounded-xl bg-black px-4 py-2.5 text-xs font-black text-white transition hover:bg-black/80"
-          >
-            View Details
-          </button>
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={onEdit}
+              className="rounded-xl border border-black/10 bg-white px-4 py-2.5 text-xs font-black text-black transition hover:bg-black/[0.04]"
+            >
+              Edit
+            </button>
+
+            <button
+              type="button"
+              onClick={onView}
+              className="rounded-xl bg-black px-4 py-2.5 text-xs font-black text-white transition hover:bg-black/80"
+            >
+              View Details
+            </button>
+          </div>
         </div>
       </div>
     </div>
@@ -1511,7 +2057,12 @@ function Field({
         }
         min={
           type === "number"
-            ? "1"
+            ? "0"
+            : undefined
+        }
+        step={
+          type === "number"
+            ? "0.01"
             : undefined
         }
         className="h-12 w-full rounded-xl border border-black/10 bg-[#f8faf8] px-4 text-sm font-semibold text-black outline-none transition placeholder:text-black/30 focus:border-[#4f9d32] focus:bg-white focus:ring-4 focus:ring-[#7ed957]/15"
