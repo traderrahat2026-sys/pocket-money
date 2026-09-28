@@ -26,6 +26,14 @@ type ReferralStats = {
   already_claimed: boolean;
 };
 
+type ReferralUser = {
+  id: string;
+  full_name: string | null;
+  username: string | null;
+  status: string;
+  created_at: string;
+};
+
 type ActivePackage = {
   id: string;
   package_amount: number;
@@ -70,6 +78,9 @@ export default function ProfilePage() {
 
   const [referral, setReferral] =
     useState<ReferralStats | null>(null);
+
+  const [referralUsers, setReferralUsers] =
+    useState<ReferralUser[]>([]);
 
   const [activePackages, setActivePackages] = useState<
     ActivePackage[]
@@ -117,6 +128,7 @@ export default function ProfilePage() {
         walletResult,
         referralResult,
         packageResult,
+        referralsResult,
       ] = await Promise.all([
         supabase
           .from("profiles")
@@ -135,6 +147,16 @@ export default function ProfilePage() {
         supabase.rpc("get_referral_stats"),
 
         supabase.rpc("get_my_active_packages"),
+
+        supabase
+          .from("referrals")
+          .select(
+            "id, referred_user_id, status, created_at"
+          )
+          .eq("referrer_id", user.id)
+          .order("created_at", {
+            ascending: false,
+          }),
       ]);
 
       if (profileResult.error) {
@@ -162,6 +184,13 @@ export default function ProfilePage() {
         console.error(
           "PROFILE PACKAGE ERROR:",
           packageResult.error
+        );
+      }
+
+      if (referralsResult.error) {
+        console.error(
+          "PROFILE REFERRAL USERS ERROR:",
+          referralsResult.error
         );
       }
 
@@ -218,6 +247,87 @@ export default function ProfilePage() {
         setActivePackages(
           packageResult.data as ActivePackage[]
         );
+      }
+
+      /*
+       * REFERRAL USERS
+       *
+       * যাদের user এই user's referral দিয়ে
+       * account করেছে তাদের তথ্য load করা হচ্ছে।
+       */
+
+      if (
+        referralsResult.data &&
+        referralsResult.data.length > 0
+      ) {
+        const referredUserIds =
+          referralsResult.data
+            .map(
+              (item) =>
+                item.referred_user_id
+            )
+            .filter(Boolean);
+
+        if (referredUserIds.length > 0) {
+          const {
+            data: referredProfiles,
+            error: referredProfilesError,
+          } = await supabase
+            .from("profiles")
+            .select(
+              "id, full_name, username"
+            )
+            .in(
+              "id",
+              referredUserIds
+            );
+
+          if (referredProfilesError) {
+            console.error(
+              "REFERRED PROFILES ERROR:",
+              referredProfilesError
+            );
+          }
+
+          if (referredProfiles) {
+            const profileMap =
+              new Map(
+                referredProfiles.map(
+                  (item) => [
+                    item.id,
+                    item,
+                  ]
+                )
+              );
+
+            const users: ReferralUser[] =
+              referralsResult.data.map(
+                (item) => {
+                  const child =
+                    profileMap.get(
+                      item.referred_user_id
+                    );
+
+                  return {
+                    id: item.id,
+                    full_name:
+                      child?.full_name ||
+                      null,
+                    username:
+                      child?.username ||
+                      null,
+                    status:
+                      item.status ||
+                      "pending",
+                    created_at:
+                      item.created_at,
+                  };
+                }
+              );
+
+            setReferralUsers(users);
+          }
+        }
       }
 
       setMemberSince(user.created_at);
@@ -554,6 +664,106 @@ export default function ProfilePage() {
 
           </div>
 
+
+          {/* MY REFERRALS */}
+
+          {referralUsers.length > 0 && (
+            <div className="mt-6 border-t border-slate-100 pt-5">
+
+              <div className="flex items-center justify-between">
+
+                <div>
+
+                  <p className="text-xs font-black uppercase tracking-wider text-slate-400">
+                    আমার রেফারেল
+                  </p>
+
+                  <h3 className="mt-1 text-base font-black text-slate-900">
+                    যারা আপনার লিংক দিয়ে যোগ দিয়েছে
+                  </h3>
+
+                </div>
+
+                <span className="rounded-full bg-purple-50 px-3 py-1 text-xs font-black text-purple-700">
+                  {referralUsers.length} জন
+                </span>
+
+              </div>
+
+
+              <div className="mt-4 space-y-3">
+
+                {referralUsers.map(
+                  (item) => {
+
+                    const isValid =
+                      item.status ===
+                      "valid";
+
+                    const name =
+                      item.full_name ||
+                      item.username ||
+                      "ব্যবহারকারী";
+
+                    return (
+                      <div
+                        key={item.id}
+                        className="rounded-2xl border border-slate-100 bg-slate-50 p-4"
+                      >
+
+                        <div className="flex items-center gap-3">
+
+                          <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-purple-100 text-xl">
+                            👤
+                          </div>
+
+                          <div className="min-w-0 flex-1">
+
+                            <p className="truncate text-sm font-black text-slate-900">
+                              {name}
+                            </p>
+
+                            {item.username &&
+                              item.username !==
+                                item.full_name && (
+                                <p className="mt-0.5 truncate text-xs font-medium text-slate-400">
+                                  @{item.username}
+                                </p>
+                              )}
+
+                            <p className="mt-1 text-[11px] font-medium text-slate-400">
+                              যোগ দিয়েছেন:{" "}
+                              {formatDate(
+                                item.created_at
+                              )}
+                            </p>
+
+                          </div>
+
+                          <span
+                            className={`shrink-0 rounded-full px-3 py-1.5 text-[11px] font-black ${
+                              isValid
+                                ? "bg-green-100 text-green-700"
+                                : "bg-amber-100 text-amber-700"
+                            }`}
+                          >
+                            {isValid
+                              ? "বৈধ"
+                              : "অপেক্ষমাণ"}
+                          </span>
+
+                        </div>
+
+                      </div>
+                    );
+                  }
+                )}
+
+              </div>
+
+            </div>
+          )}
+
         </section>
 
 
@@ -711,7 +921,7 @@ export default function ProfilePage() {
                 </p>
 
                 <p className="mt-1 text-sm font-black text-slate-800">
-                  {referralCount}
+                  {referralUsers.length}
                 </p>
 
               </div>

@@ -20,14 +20,6 @@ const SUPABASE_URL =
 const SUPABASE_SERVICE_ROLE_KEY =
   process.env.SUPABASE_SERVICE_ROLE_KEY || "";
 
-/*
-|--------------------------------------------------------------------------
-| OFFICIAL PACKAGE AMOUNTS
-|--------------------------------------------------------------------------
-| These packages must always appear in the admin Packages page,
-| even if a package currently has no image or task.
-*/
-
 const OFFICIAL_PACKAGE_AMOUNTS = [
   500,
   1000,
@@ -39,12 +31,6 @@ const OFFICIAL_PACKAGE_AMOUNTS = [
   20000,
   25000,
 ];
-
-/*
-|--------------------------------------------------------------------------
-| SUPABASE ADMIN CLIENT
-|--------------------------------------------------------------------------
-*/
 
 function getSupabaseAdmin() {
   if (
@@ -67,12 +53,6 @@ function getSupabaseAdmin() {
     }
   );
 }
-
-/*
-|--------------------------------------------------------------------------
-| SAFE STRING COMPARE
-|--------------------------------------------------------------------------
-*/
 
 function safeCompare(
   a: string,
@@ -101,12 +81,6 @@ function safeCompare(
   );
 }
 
-/*
-|--------------------------------------------------------------------------
-| VERIFY ADMIN SESSION
-|--------------------------------------------------------------------------
-*/
-
 function verifySessionToken(
   token: string
 ) {
@@ -131,10 +105,6 @@ function verifySessionToken(
     if (
       parts.length !== 3
     ) {
-      console.error(
-        "PACKAGES AUTH: Invalid token structure."
-      );
-
       return null;
     }
 
@@ -149,10 +119,6 @@ function verifySessionToken(
       !issuedAtText ||
       !signature
     ) {
-      console.error(
-        "PACKAGES AUTH: Missing token fields."
-      );
-
       return null;
     }
 
@@ -162,10 +128,6 @@ function verifySessionToken(
         ADMIN_USERNAME
       )
     ) {
-      console.error(
-        "PACKAGES AUTH: Username mismatch."
-      );
-
       return null;
     }
 
@@ -177,10 +139,6 @@ function verifySessionToken(
         issuedAt
       )
     ) {
-      console.error(
-        "PACKAGES AUTH: Invalid issuedAt."
-      );
-
       return null;
     }
 
@@ -191,10 +149,6 @@ function verifySessionToken(
       issuedAt >
       now + 60 * 1000
     ) {
-      console.error(
-        "PACKAGES AUTH: Token timestamp is in the future."
-      );
-
       return null;
     }
 
@@ -203,10 +157,6 @@ function verifySessionToken(
       SESSION_MAX_AGE_SECONDS *
         1000
     ) {
-      console.error(
-        "PACKAGES AUTH: Session expired."
-      );
-
       return null;
     }
 
@@ -227,10 +177,6 @@ function verifySessionToken(
         expectedSignature
       )
     ) {
-      console.error(
-        "PACKAGES AUTH: Signature mismatch."
-      );
-
       return null;
     }
 
@@ -238,21 +184,10 @@ function verifySessionToken(
       username,
       issuedAt,
     };
-  } catch (error) {
-    console.error(
-      "PACKAGES AUTH: Token verification failed:",
-      error
-    );
-
+  } catch {
     return null;
   }
 }
-
-/*
-|--------------------------------------------------------------------------
-| GET ADMIN SESSION
-|--------------------------------------------------------------------------
-*/
 
 function getAdminSession(
   request: NextRequest
@@ -263,10 +198,6 @@ function getAdminSession(
     )?.value;
 
   if (!token) {
-    console.error(
-      "PACKAGES AUTH: Admin cookie not found."
-    );
-
     return null;
   }
 
@@ -274,12 +205,6 @@ function getAdminSession(
     token
   );
 }
-
-/*
-|--------------------------------------------------------------------------
-| UNAUTHORIZED
-|--------------------------------------------------------------------------
-*/
 
 function unauthorizedResponse() {
   return NextResponse.json(
@@ -303,10 +228,6 @@ export async function GET(
   request: NextRequest
 ) {
   try {
-    /*
-     * Admin authentication
-     */
-
     const session =
       getAdminSession(
         request
@@ -318,10 +239,6 @@ export async function GET(
 
     const supabase =
       getSupabaseAdmin();
-
-    /*
-     * Read filters
-     */
 
     const { searchParams } =
       new URL(
@@ -341,20 +258,61 @@ export async function GET(
       ) || "all";
 
     /*
-     |--------------------------------------------------------------------------
-     | LOAD ALL REAL PACKAGE DATA
-     |--------------------------------------------------------------------------
-     */
+    |--------------------------------------------------------------------------
+    | LOAD PACKAGE MASTER DATA
+    |--------------------------------------------------------------------------
+    */
 
-    const [
-      activationsResult,
-      tasksResult,
-      imagesResult,
-    ] = await Promise.all([
-      /*
-       * REAL USER PACKAGE ACTIVATIONS
-       */
-      supabase
+    const packagesResult =
+      await supabase
+        .from("packages")
+        .select(
+          `
+            id,
+            package_amount,
+            daily_reward,
+            duration_days,
+            is_active,
+            created_at,
+            updated_at
+          `
+        )
+        .order(
+          "package_amount",
+          {
+            ascending: true,
+          }
+        );
+
+    if (
+      packagesResult.error
+    ) {
+      console.error(
+        "PACKAGES MASTER ERROR:",
+        packagesResult.error
+      );
+
+      return NextResponse.json(
+        {
+          success: false,
+          error:
+            packagesResult.error.message ||
+            "Failed to load package settings.",
+        },
+        {
+          status: 500,
+        }
+      );
+    }
+
+    /*
+    |--------------------------------------------------------------------------
+    | LOAD ACTIVATIONS
+    |--------------------------------------------------------------------------
+    */
+
+    const activationsResult =
+      await supabase
         .from(
           "user_package_activations"
         )
@@ -376,12 +334,37 @@ export async function GET(
           {
             ascending: false,
           }
-        ),
+        );
 
-      /*
-       * REAL PACKAGE TASKS
-       */
-      supabase
+    if (
+      activationsResult.error
+    ) {
+      console.error(
+        "PACKAGES ACTIVATIONS ERROR:",
+        activationsResult.error
+      );
+
+      return NextResponse.json(
+        {
+          success: false,
+          error:
+            activationsResult.error.message ||
+            "Failed to load package activations.",
+        },
+        {
+          status: 500,
+        }
+      );
+    }
+
+    /*
+    |--------------------------------------------------------------------------
+    | LOAD TASKS
+    |--------------------------------------------------------------------------
+    */
+
+    const tasksResult =
+      await supabase
         .from(
           "package_tasks"
         )
@@ -407,12 +390,37 @@ export async function GET(
           {
             ascending: false,
           }
-        ),
+        );
 
-      /*
-       * REAL PACKAGE IMAGES
-       */
-      supabase
+    if (
+      tasksResult.error
+    ) {
+      console.error(
+        "PACKAGES TASKS ERROR:",
+        tasksResult.error
+      );
+
+      return NextResponse.json(
+        {
+          success: false,
+          error:
+            tasksResult.error.message ||
+            "Failed to load package tasks.",
+        },
+        {
+          status: 500,
+        }
+      );
+    }
+
+    /*
+    |--------------------------------------------------------------------------
+    | LOAD IMAGES
+    |--------------------------------------------------------------------------
+    */
+
+    const imagesResult =
+      await supabase
         .from(
           "package_images"
         )
@@ -431,60 +439,7 @@ export async function GET(
           {
             ascending: false,
           }
-        ),
-    ]);
-
-    /*
-     |--------------------------------------------------------------------------
-     | DATABASE ERROR HANDLING
-     |--------------------------------------------------------------------------
-     */
-
-    if (
-      activationsResult.error
-    ) {
-      console.error(
-        "PACKAGES ACTIVATIONS ERROR:",
-        activationsResult.error
-      );
-
-      return NextResponse.json(
-        {
-          success: false,
-          error:
-            activationsResult
-              .error
-              .message ||
-            "Failed to load package activations.",
-        },
-        {
-          status: 500,
-        }
-      );
-    }
-
-    if (
-      tasksResult.error
-    ) {
-      console.error(
-        "PACKAGES TASKS ERROR:",
-        tasksResult.error
-      );
-
-      return NextResponse.json(
-        {
-          success: false,
-          error:
-            tasksResult
-              .error
-              .message ||
-            "Failed to load package tasks.",
-        },
-        {
-          status: 500,
-        }
-      );
-    }
+        );
 
     if (
       imagesResult.error
@@ -498,9 +453,7 @@ export async function GET(
         {
           success: false,
           error:
-            imagesResult
-              .error
-              .message ||
+            imagesResult.error.message ||
             "Failed to load package images.",
         },
         {
@@ -508,6 +461,9 @@ export async function GET(
         }
       );
     }
+
+    const masterPackages =
+      packagesResult.data || [];
 
     const activations =
       activationsResult.data || [];
@@ -519,21 +475,35 @@ export async function GET(
       imagesResult.data || [];
 
     /*
-     |--------------------------------------------------------------------------
-     | PACKAGE AMOUNTS
-     |--------------------------------------------------------------------------
-     |
-     | Start with the official 9 packages.
-     |
-     | Then also include any additional package amount
-     | found in database, so existing real data is never hidden.
-     |
-     */
+    |--------------------------------------------------------------------------
+    | PACKAGE AMOUNTS
+    |--------------------------------------------------------------------------
+    */
 
     const packageAmountsSet =
       new Set<number>(
         OFFICIAL_PACKAGE_AMOUNTS
       );
+
+    for (
+      const pkg of masterPackages
+    ) {
+      const amount =
+        Number(
+          pkg.package_amount
+        );
+
+      if (
+        Number.isFinite(
+          amount
+        ) &&
+        amount > 0
+      ) {
+        packageAmountsSet.add(
+          amount
+        );
+      }
+    }
 
     for (
       const activation of activations
@@ -603,12 +573,6 @@ export async function GET(
           a - b
       );
 
-    /*
-     |--------------------------------------------------------------------------
-     | SEARCH
-     |--------------------------------------------------------------------------
-     */
-
     if (search) {
       packageAmounts =
         packageAmounts.filter(
@@ -622,18 +586,22 @@ export async function GET(
     }
 
     /*
-     |--------------------------------------------------------------------------
-     | BUILD PACKAGE OBJECTS
-     |--------------------------------------------------------------------------
-     */
+    |--------------------------------------------------------------------------
+    | BUILD PACKAGES
+    |--------------------------------------------------------------------------
+    */
 
     const packages =
       packageAmounts.map(
         (amount) => {
-          /*
-           * All activation records
-           * for this package.
-           */
+          const masterPackage =
+            masterPackages.find(
+              (pkg) =>
+                Number(
+                  pkg.package_amount
+                ) === amount
+            );
+
           const packageActivations =
             activations.filter(
               (activation) =>
@@ -642,9 +610,6 @@ export async function GET(
                 ) === amount
             );
 
-          /*
-           * Active activation records.
-           */
           const activeActivations =
             packageActivations.filter(
               (activation) =>
@@ -652,9 +617,6 @@ export async function GET(
                 true
             );
 
-          /*
-           * Inactive activation records.
-           */
           const inactiveActivations =
             packageActivations.filter(
               (activation) =>
@@ -662,13 +624,6 @@ export async function GET(
                 true
             );
 
-          /*
-           * DISTINCT ACTIVE USERS
-           *
-           * If the same user somehow has
-           * multiple active records, count
-           * that user only once.
-           */
           const activeUserIds =
             new Set<string>();
 
@@ -685,9 +640,6 @@ export async function GET(
             }
           }
 
-          /*
-           * DISTINCT TOTAL USERS
-           */
           const totalUserIds =
             new Set<string>();
 
@@ -704,9 +656,6 @@ export async function GET(
             }
           }
 
-          /*
-           * Package tasks
-           */
           const packageTasks =
             tasks.filter(
               (task) =>
@@ -729,9 +678,6 @@ export async function GET(
                 true
             );
 
-          /*
-           * Package images
-           */
           const packageImages =
             images.filter(
               (image) =>
@@ -740,9 +686,6 @@ export async function GET(
                 ) === amount
             );
 
-          /*
-           * Total configured task rewards
-           */
           const totalRewards =
             packageTasks.reduce(
               (
@@ -757,60 +700,70 @@ export async function GET(
               0
             );
 
-          /*
-           * Primary/latest image
-           */
           const primaryImage =
             packageImages[0] ||
             null;
 
-          /*
-           * Latest activation
-           */
           const latestActivation =
             packageActivations[0] ||
             null;
 
-          /*
-           * Return package
-           */
+          const dailyReward =
+            Number(
+              masterPackage?.daily_reward ||
+                0
+            );
+
+          const durationDays =
+            Number(
+              masterPackage?.duration_days ||
+                30
+            );
+
           return {
+            id:
+              masterPackage?.id ||
+              null,
+
             package_amount:
               amount,
 
             packageAmount:
               amount,
 
-            /*
-             * A package is considered
-             * active when at least one
-             * user currently has it active.
-             */
+            daily_reward:
+              dailyReward,
+
+            dailyReward:
+              dailyReward,
+
+            duration_days:
+              durationDays,
+
+            durationDays:
+              durationDays,
+
+            is_active:
+              masterPackage
+                ? masterPackage.is_active
+                : true,
+
             active:
               activeUserIds.size >
               0,
 
-            /*
-             * DISTINCT USER COUNTS
-             */
             activeUsers:
               activeUserIds.size,
 
             totalUsers:
               totalUserIds.size,
 
-            /*
-             * Activation counts
-             */
             totalActivations:
               packageActivations.length,
 
             inactiveUsers:
               inactiveActivations.length,
 
-            /*
-             * Tasks
-             */
             activeTasks:
               activeTasks.length,
 
@@ -822,15 +775,9 @@ export async function GET(
 
             totalRewards,
 
-            /*
-             * Images
-             */
             imagesCount:
               packageImages.length,
 
-            /*
-             * Primary image
-             */
             image:
               primaryImage
                 ?.image_url ||
@@ -846,9 +793,6 @@ export async function GET(
                 ?.storage_path ||
               null,
 
-            /*
-             * FULL REAL DATA
-             */
             images:
               packageImages,
 
@@ -864,10 +808,10 @@ export async function GET(
       );
 
     /*
-     |--------------------------------------------------------------------------
-     | STATUS FILTER
-     |--------------------------------------------------------------------------
-     */
+    |--------------------------------------------------------------------------
+    | STATUS FILTER
+    |--------------------------------------------------------------------------
+    */
 
     let filteredPackages =
       packages;
@@ -897,22 +841,15 @@ export async function GET(
     }
 
     /*
-     |--------------------------------------------------------------------------
-     | SUMMARY
-     |--------------------------------------------------------------------------
-     */
+    |--------------------------------------------------------------------------
+    | SUMMARY
+    |--------------------------------------------------------------------------
+    */
 
     const summary = {
-      /*
-       * Number of package sections.
-       */
       totalPackages:
         filteredPackages.length,
 
-      /*
-       * Sum of distinct active
-       * package users.
-       */
       activePackageUsers:
         filteredPackages.reduce(
           (
@@ -927,10 +864,6 @@ export async function GET(
           0
         ),
 
-      /*
-       * Sum of distinct users
-       * across package records.
-       */
       totalPackageUsers:
         filteredPackages.reduce(
           (
@@ -945,9 +878,6 @@ export async function GET(
           0
         ),
 
-      /*
-       * Total activation rows.
-       */
       totalActivations:
         filteredPackages.reduce(
           (
@@ -962,9 +892,6 @@ export async function GET(
           0
         ),
 
-      /*
-       * Tasks
-       */
       totalTasks:
         filteredPackages.reduce(
           (
@@ -993,9 +920,6 @@ export async function GET(
           0
         ),
 
-      /*
-       * Images
-       */
       totalImages:
         filteredPackages.reduce(
           (
@@ -1010,9 +934,6 @@ export async function GET(
           0
         ),
 
-      /*
-       * Rewards
-       */
       totalRewards:
         filteredPackages.reduce(
           (
@@ -1028,12 +949,6 @@ export async function GET(
         ),
     };
 
-    /*
-     |--------------------------------------------------------------------------
-     | RESPONSE
-     |--------------------------------------------------------------------------
-     */
-
     return NextResponse.json(
       {
         success: true,
@@ -1043,10 +958,6 @@ export async function GET(
 
         summary,
 
-        /*
-         * Always expose official package
-         * amounts as well.
-         */
         officialPackages:
           OFFICIAL_PACKAGE_AMOUNTS,
 
@@ -1079,7 +990,8 @@ export async function GET(
 
 /*
 |--------------------------------------------------------------------------
-| POST PACKAGE IMAGE
+| POST
+| PACKAGE IMAGE OR PACKAGE
 |--------------------------------------------------------------------------
 */
 
@@ -1102,10 +1014,144 @@ export async function POST(
     const body =
       await request.json();
 
+    const action =
+      body.action || "image";
+
     /*
-     * Support both old and new
-     * field names.
-     */
+    |--------------------------------------------------------------------------
+    | CREATE PACKAGE
+    |--------------------------------------------------------------------------
+    */
+
+    if (
+      action ===
+      "package"
+    ) {
+      const packageAmount =
+        Number(
+          body.package_amount
+        );
+
+      const dailyReward =
+        Number(
+          body.daily_reward
+        );
+
+      const durationDays =
+        Number(
+          body.duration_days ??
+            30
+        );
+
+      const isActive =
+        body.is_active !==
+        false;
+
+      if (
+        !Number.isFinite(
+          packageAmount
+        ) ||
+        packageAmount <= 0
+      ) {
+        return NextResponse.json(
+          {
+            success: false,
+            error:
+              "Valid package amount is required.",
+          },
+          {
+            status: 400,
+          }
+        );
+      }
+
+      if (
+        !Number.isFinite(
+          dailyReward
+        ) ||
+        dailyReward < 0
+      ) {
+        return NextResponse.json(
+          {
+            success: false,
+            error:
+              "Valid daily reward is required.",
+          },
+          {
+            status: 400,
+          }
+        );
+      }
+
+      if (
+        !Number.isInteger(
+          durationDays
+        ) ||
+        durationDays <= 0
+      ) {
+        return NextResponse.json(
+          {
+            success: false,
+            error:
+              "Valid duration is required.",
+          },
+          {
+            status: 400,
+          }
+        );
+      }
+
+      const {
+        data,
+        error,
+      } = await supabase
+        .from("packages")
+        .insert({
+          package_amount:
+            packageAmount,
+
+          daily_reward:
+            dailyReward,
+
+          duration_days:
+            durationDays,
+
+          is_active:
+            isActive,
+        })
+        .select()
+        .single();
+
+      if (error) {
+        console.error(
+          "ADMIN PACKAGE CREATE ERROR:",
+          error
+        );
+
+        return NextResponse.json(
+          {
+            success: false,
+            error:
+              error.message,
+          },
+          {
+            status: 500,
+          }
+        );
+      }
+
+      return NextResponse.json({
+        success: true,
+        package: data,
+      });
+    }
+
+    /*
+    |--------------------------------------------------------------------------
+    | CREATE PACKAGE IMAGE
+    |--------------------------------------------------------------------------
+    */
+
     const packageAmount =
       Number(
         body.package_amount ??
@@ -1188,7 +1234,7 @@ export async function POST(
 
     if (error) {
       console.error(
-        "ADMIN PACKAGES POST ERROR:",
+        "ADMIN PACKAGES IMAGE POST ERROR:",
         error
       );
 
@@ -1220,7 +1266,7 @@ export async function POST(
         error:
           error instanceof Error
             ? error.message
-            : "Failed to create package image.",
+            : "Failed to create package.",
       },
       {
         status: 500,
@@ -1231,7 +1277,8 @@ export async function POST(
 
 /*
 |--------------------------------------------------------------------------
-| PATCH PACKAGE IMAGE
+| PATCH
+| PACKAGE MASTER / PACKAGE IMAGE
 |--------------------------------------------------------------------------
 */
 
@@ -1253,6 +1300,399 @@ export async function PATCH(
 
     const body =
       await request.json();
+
+    /*
+    |--------------------------------------------------------------------------
+    | PACKAGE MASTER EDIT
+    |--------------------------------------------------------------------------
+    */
+
+    if (
+      body.type ===
+      "package" ||
+      body.package_id
+    ) {
+      const packageId =
+        body.package_id ||
+        body.id;
+
+      if (!packageId) {
+        return NextResponse.json(
+          {
+            success: false,
+            error:
+              "Package ID is required.",
+          },
+          {
+            status: 400,
+          }
+        );
+      }
+
+      const {
+        data: currentPackage,
+        error:
+          currentPackageError,
+      } = await supabase
+        .from("packages")
+        .select(
+          `
+            id,
+            package_amount,
+            daily_reward,
+            duration_days,
+            is_active
+          `
+        )
+        .eq(
+          "id",
+          packageId
+        )
+        .maybeSingle();
+
+      if (
+        currentPackageError
+      ) {
+        return NextResponse.json(
+          {
+            success: false,
+            error:
+              currentPackageError.message,
+          },
+          {
+            status: 500,
+          }
+        );
+      }
+
+      if (!currentPackage) {
+        return NextResponse.json(
+          {
+            success: false,
+            error:
+              "Package not found.",
+          },
+          {
+            status: 404,
+          }
+        );
+      }
+
+      const oldAmount =
+        Number(
+          currentPackage.package_amount
+        );
+
+      const newAmount =
+        body.package_amount !==
+        undefined
+          ? Number(
+              body.package_amount
+            )
+          : oldAmount;
+
+      const dailyReward =
+        body.daily_reward !==
+        undefined
+          ? Number(
+              body.daily_reward
+            )
+          : Number(
+              currentPackage.daily_reward
+            );
+
+      const durationDays =
+        body.duration_days !==
+        undefined
+          ? Number(
+              body.duration_days
+            )
+          : Number(
+              currentPackage.duration_days
+          );
+
+      const isActive =
+        body.is_active !==
+        undefined
+          ? Boolean(
+              body.is_active
+            )
+          : Boolean(
+              currentPackage.is_active
+            );
+
+      if (
+        !Number.isFinite(
+          newAmount
+        ) ||
+        newAmount <= 0
+      ) {
+        return NextResponse.json(
+          {
+            success: false,
+            error:
+              "Invalid package price.",
+          },
+          {
+            status: 400,
+          }
+        );
+      }
+
+      if (
+        !Number.isFinite(
+          dailyReward
+        ) ||
+        dailyReward < 0
+      ) {
+        return NextResponse.json(
+          {
+            success: false,
+            error:
+              "Invalid daily reward.",
+          },
+          {
+            status: 400,
+          }
+        );
+      }
+
+      if (
+        !Number.isInteger(
+          durationDays
+        ) ||
+        durationDays <= 0
+      ) {
+        return NextResponse.json(
+          {
+            success: false,
+            error:
+              "Invalid duration.",
+          },
+          {
+            status: 400,
+          }
+        );
+      }
+
+      /*
+      |--------------------------------------------------------------------------
+      | CHECK DUPLICATE PACKAGE PRICE
+      |--------------------------------------------------------------------------
+      */
+
+      if (
+        newAmount !==
+        oldAmount
+      ) {
+        const {
+          data: duplicatePackage,
+          error:
+            duplicateError,
+        } = await supabase
+          .from("packages")
+          .select("id")
+          .eq(
+            "package_amount",
+            newAmount
+          )
+          .neq(
+            "id",
+            packageId
+          )
+          .maybeSingle();
+
+        if (
+          duplicateError
+        ) {
+          return NextResponse.json(
+            {
+              success: false,
+              error:
+                duplicateError.message,
+            },
+            {
+              status: 500,
+            }
+          );
+        }
+
+        if (
+          duplicatePackage
+        ) {
+          return NextResponse.json(
+            {
+              success: false,
+              error:
+                "A package with this price already exists.",
+            },
+            {
+              status: 409,
+            }
+          );
+        }
+
+        /*
+        |--------------------------------------------------------------------------
+        | UPDATE EXISTING REFERENCES
+        |--------------------------------------------------------------------------
+        |
+        | package_amount is currently used as the
+        | package identifier in these existing tables.
+        |
+        */
+
+        const taskUpdate =
+          await supabase
+            .from(
+              "package_tasks"
+            )
+            .update({
+              package_amount:
+                newAmount,
+            })
+            .eq(
+              "package_amount",
+              oldAmount
+            );
+
+        if (
+          taskUpdate.error
+        ) {
+          return NextResponse.json(
+            {
+              success: false,
+              error:
+                taskUpdate.error.message,
+            },
+            {
+              status: 500,
+            }
+          );
+        }
+
+        const imageUpdate =
+          await supabase
+            .from(
+              "package_images"
+            )
+            .update({
+              package_amount:
+                newAmount,
+            })
+            .eq(
+              "package_amount",
+              oldAmount
+            );
+
+        if (
+          imageUpdate.error
+        ) {
+          return NextResponse.json(
+            {
+              success: false,
+              error:
+                imageUpdate.error.message,
+            },
+            {
+              status: 500,
+            }
+          );
+        }
+
+        const activationUpdate =
+          await supabase
+            .from(
+              "user_package_activations"
+            )
+            .update({
+              package_amount:
+                newAmount,
+            })
+            .eq(
+              "package_amount",
+              oldAmount
+            );
+
+        if (
+          activationUpdate.error
+        ) {
+          return NextResponse.json(
+            {
+              success: false,
+              error:
+                activationUpdate.error.message,
+            },
+            {
+              status: 500,
+            }
+          );
+        }
+      }
+
+      /*
+      |--------------------------------------------------------------------------
+      | UPDATE PACKAGE MASTER
+      |--------------------------------------------------------------------------
+      */
+
+      const {
+        data,
+        error,
+      } = await supabase
+        .from("packages")
+        .update({
+          package_amount:
+            newAmount,
+
+          daily_reward:
+            dailyReward,
+
+          duration_days:
+            durationDays,
+
+          is_active:
+            isActive,
+
+          updated_at:
+            new Date().toISOString(),
+        })
+        .eq(
+          "id",
+          packageId
+        )
+        .select()
+        .single();
+
+      if (error) {
+        console.error(
+          "ADMIN PACKAGE UPDATE ERROR:",
+          error
+        );
+
+        return NextResponse.json(
+          {
+            success: false,
+            error:
+              error.message,
+          },
+          {
+            status: 500,
+          }
+        );
+      }
+
+      return NextResponse.json({
+        success: true,
+        package: data,
+      });
+    }
+
+    /*
+    |--------------------------------------------------------------------------
+    | PACKAGE IMAGE EDIT
+    |--------------------------------------------------------------------------
+    */
 
     const id =
       body.id;
@@ -1352,7 +1792,7 @@ export async function PATCH(
 
     if (error) {
       console.error(
-        "ADMIN PACKAGES PATCH ERROR:",
+        "ADMIN PACKAGE IMAGE PATCH ERROR:",
         error
       );
 
@@ -1384,7 +1824,7 @@ export async function PATCH(
         error:
           error instanceof Error
             ? error.message
-            : "Failed to update package image.",
+            : "Failed to update package.",
       },
       {
         status: 500,
@@ -1420,11 +1860,6 @@ export async function DELETE(
         request.url
       );
 
-    /*
-     * Support both:
-     * ?id=
-     * ?imageId=
-     */
     const id =
       searchParams.get(
         "id"

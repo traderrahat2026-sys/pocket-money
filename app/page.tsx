@@ -124,10 +124,6 @@ export default function Home() {
 
     async function initializeAuth() {
       try {
-        /*
-         * Profile page যেহেতু getUser() দিয়ে সঠিক user পাচ্ছে,
-         * Home page-ও একই server-verified auth state ব্যবহার করবে।
-         */
         const {
           data: { user },
           error,
@@ -163,19 +159,12 @@ export default function Home() {
 
     initializeAuth();
 
-    /*
-     * Login / Logout হলে Home page সঙ্গে সঙ্গে update হবে।
-     */
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange(
       (event, session) => {
         if (!mounted) return;
 
-        /*
-         * INITIAL_SESSION, SIGNED_IN,
-         * SIGNED_OUT সব event handle করা হচ্ছে।
-         */
         if (
           event === "SIGNED_OUT"
         ) {
@@ -213,9 +202,6 @@ export default function Home() {
     let mounted = true;
 
     async function loadReferralStats() {
-      /*
-       * Auth check শেষ না হওয়া পর্যন্ত referral RPC চালাব না।
-       */
       if (checkingAuth) {
         return;
       }
@@ -233,9 +219,6 @@ export default function Home() {
       setLoadingReferral(true);
 
       try {
-        /*
-         * RPC চালানোর আগে নিশ্চিত করছি user session আছে।
-         */
         const {
           data: { user },
           error: userError,
@@ -577,8 +560,9 @@ export default function Home() {
                   অতিরিক্ত
                 </p>
 
+                {/* পরিবর্তন: ৳৫০০ → ৳২০০ */}
                 <p className="text-sm font-black text-green-400">
-                  +৳৫০০
+                  +৳২০০
                 </p>
 
               </div>
@@ -609,8 +593,9 @@ export default function Home() {
                   বোনাস
                 </p>
 
+                {/* পরিবর্তন: ৳৫০০ → ৳২০০ */}
                 <p className="mt-0.5 text-xl font-black text-green-400 sm:text-2xl">
-                  ৳৫০০
+                  ৳২০০
                 </p>
 
               </div>
@@ -625,8 +610,9 @@ export default function Home() {
                   মোট
                 </p>
 
+                {/* পরিবর্তন: ৳২,৫০০ → ৳২,২০০ */}
                 <p className="text-base font-black text-white">
-                  ৳২,৫০০
+                  ৳২,২০০
                 </p>
 
               </div>
