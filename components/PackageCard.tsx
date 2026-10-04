@@ -6,11 +6,9 @@ import { supabase } from "@/lib/supabase";
 
 type PackageData = {
   id: string;
-  name: string;
-  amount?: number | null;
-  daily_earning?: number | null;
-  duration_days?: number | null;
-  total_earning?: number | null;
+  package_amount: number;
+  daily_reward: number;
+  duration_days: number;
   image_url?: string | null;
   is_active?: boolean;
 };
@@ -49,15 +47,38 @@ export default function PackageCard({ pkg }: Props) {
   const [isActivated, setIsActivated] = useState(false);
   const [popup, setPopup] = useState<PopupState | null>(null);
 
-  const amount = Number(pkg.amount ?? 0);
-  const dailyEarning = Number(pkg.daily_earning ?? 0);
-  const durationDays = Number(pkg.duration_days ?? 0);
-  const totalEarning = Number(
-    pkg.total_earning ?? dailyEarning * durationDays
-  );
+  /*
+   * =====================================================
+   * MASTER PACKAGE DATA
+   * =====================================================
+   *
+   * এই values সরাসরি public.packages table থেকে আসবে।
+   *
+   * package_amount = Package Price
+   * daily_reward   = Daily Earning
+   * duration_days  = Package Duration
+   *
+   * এখানে কোনো static reward রাখা হয়নি।
+   */
+
+  const amount = Number(pkg.package_amount || 0);
+
+  const dailyEarning = Number(pkg.daily_reward || 0);
+
+  const durationDays = Number(pkg.duration_days || 30);
+
+  /*
+   * Total earning সবসময় database-এর
+   * daily_reward × duration_days থেকে calculate হবে।
+   */
+
+  const totalEarning = dailyEarning * durationDays;
+
+  const packageName =
+    `${amount.toLocaleString("en-BD")} টাকার প্যাকেজ`;
 
   const money = (value: number) =>
-    `৳${value.toLocaleString("en-BD")}`;
+    `৳${Number(value || 0).toLocaleString("en-BD")}`;
 
   /*
    * =====================================================
@@ -247,7 +268,8 @@ export default function PackageCard({ pkg }: Props) {
 
       const matchingPackage = activations.find(
         (item) =>
-          Number(item.package_amount) === Number(amount)
+          Number(item.package_amount) ===
+          Number(amount)
       );
 
       if (!matchingPackage) {
@@ -368,7 +390,8 @@ export default function PackageCard({ pkg }: Props) {
         let activations: Activation[] = [];
 
         if (Array.isArray(activeData)) {
-          activations = activeData as Activation[];
+          activations =
+            activeData as Activation[];
         } else if (
           activeData &&
           typeof activeData === "object"
@@ -424,11 +447,24 @@ export default function PackageCard({ pkg }: Props) {
       }
 
       /*
-       * Activate
+       * =================================================
+       * DATABASE ACTIVATION
+       * =================================================
+       *
+       * এখানে শুধু package_amount পাঠানো হচ্ছে।
+       *
+       * Database-এর activate_my_package()
+       * master packages table থেকে:
+       *
+       * package_amount
+       * daily_reward
+       * duration_days
+       *
+       * নিজে নিয়ে activation তৈরি করবে।
        */
 
       const { data, error } = await supabase.rpc(
-        "activate_user_package",
+        "activate_my_package",
         {
           p_package_amount: amount,
         }
@@ -452,7 +488,7 @@ export default function PackageCard({ pkg }: Props) {
           showPopup(
             "error",
             "ব্যালেন্স পর্যাপ্ত নয়",
-            "এই প্যাকেজটি চালু করার জন্য আপনার অ্যাকাউন্টে পর্যাপ্ত ব্যালেন্স নেই।"
+            "এই প্যাকেজটি চালু করার জন্য আপনার অ্যাকাউন্টে পর্যাপ্ত ডিপোজিট ব্যালেন্স নেই।"
           );
         } else if (
           errorText.includes("already") ||
@@ -464,6 +500,15 @@ export default function PackageCard({ pkg }: Props) {
             "warning",
             "প্যাকেজ ইতিমধ্যে চালু",
             "এই প্যাকেজটি আপনার অ্যাকাউন্টে ইতিমধ্যে সক্রিয় আছে।"
+          );
+        } else if (
+          errorText.includes("package") &&
+          errorText.includes("not found")
+        ) {
+          showPopup(
+            "error",
+            "প্যাকেজ পাওয়া যায়নি",
+            "এই প্যাকেজটি বর্তমানে সক্রিয় নেই।"
           );
         } else {
           showPopup(
@@ -479,7 +524,9 @@ export default function PackageCard({ pkg }: Props) {
       }
 
       /*
-       * RPC response
+       * =================================================
+       * RPC RESPONSE
+       * =================================================
        */
 
       let result: any = data;
@@ -529,7 +576,7 @@ export default function PackageCard({ pkg }: Props) {
           showPopup(
             "error",
             "ব্যালেন্স পর্যাপ্ত নয়",
-            "এই প্যাকেজটি চালু করার জন্য আপনার অ্যাকাউন্টে পর্যাপ্ত ব্যালেন্স নেই।"
+            "এই প্যাকেজটি চালু করার জন্য আপনার অ্যাকাউন্টে পর্যাপ্ত ডিপোজিট ব্যালেন্স নেই।"
           );
         } else if (
           messageText.includes("already") ||
@@ -555,7 +602,9 @@ export default function PackageCard({ pkg }: Props) {
       }
 
       /*
-       * Success
+       * =================================================
+       * SUCCESS
+       * =================================================
        */
 
       setIsActivated(true);
@@ -776,7 +825,7 @@ export default function PackageCard({ pkg }: Props) {
           <div className="mb-3 flex items-start justify-between gap-3">
             <div>
               <h2 className="text-base font-black leading-tight text-slate-900">
-                {pkg.name}
+                {packageName}
               </h2>
 
               <p className="mt-1 text-[11px] font-medium text-slate-400">
@@ -801,6 +850,8 @@ export default function PackageCard({ pkg }: Props) {
 
           <div className="grid grid-cols-3 gap-2">
 
+            {/* Daily */}
+
             <div className="rounded-2xl border border-slate-100 bg-slate-50 p-2.5">
               <div className="mb-1 text-[9px] font-bold text-slate-400">
                 দৈনিক
@@ -810,6 +861,8 @@ export default function PackageCard({ pkg }: Props) {
                 {money(dailyEarning)}
               </div>
             </div>
+
+            {/* Total */}
 
             <div className="rounded-2xl border border-slate-100 bg-slate-50 p-2.5">
               <div className="mb-1 text-[9px] font-bold text-slate-400">
@@ -821,6 +874,8 @@ export default function PackageCard({ pkg }: Props) {
               </div>
             </div>
 
+            {/* Duration */}
+
             <div className="rounded-2xl border border-slate-100 bg-slate-50 p-2.5">
               <div className="mb-1 text-[9px] font-bold text-slate-400">
                 সময়কাল
@@ -828,6 +883,7 @@ export default function PackageCard({ pkg }: Props) {
 
               <div className="text-sm font-black text-slate-900">
                 {durationDays}
+
                 <span className="ml-0.5 text-[10px] font-bold text-slate-400">
                   দিন
                 </span>
@@ -889,7 +945,7 @@ export default function PackageCard({ pkg }: Props) {
                   </svg>
                 </span>
 
-                প্যাকেজ সক্রিয়
+                Active Now
               </button>
             ) : (
               <button

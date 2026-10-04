@@ -20,6 +20,11 @@ const ADMIN_USERNAME =
 const ADMIN_SESSION_SECRET =
   process.env.ADMIN_SESSION_SECRET || "";
 
+const TASK_CYCLE_HOURS = 24;
+
+const TASK_CYCLE_MS =
+  TASK_CYCLE_HOURS * 60 * 60 * 1000;
+
 type AdminSession = {
   username: string;
   issuedAt: number;
@@ -32,13 +37,13 @@ type AdminSession = {
 function getSupabase() {
   if (!SUPABASE_URL) {
     throw new Error(
-      "NEXT_PUBLIC_SUPABASE_URL is missing.",
+      "NEXT_PUBLIC_SUPABASE_URL is missing."
     );
   }
 
   if (!SUPABASE_SERVICE_ROLE_KEY) {
     throw new Error(
-      "SUPABASE_SERVICE_ROLE_KEY is missing.",
+      "SUPABASE_SERVICE_ROLE_KEY is missing."
     );
   }
 
@@ -50,24 +55,23 @@ function getSupabase() {
         autoRefreshToken: false,
         persistSession: false,
       },
-    },
+    }
   );
 }
 
 /* =========================================================
    VERIFY ADMIN SESSION
-   EXACT SAME FORMAT AS /api/admin/session
 ========================================================= */
 
 function verifySessionToken(
-  token: string,
+  token: string
 ): AdminSession | null {
   if (
     !ADMIN_USERNAME ||
     !ADMIN_SESSION_SECRET
   ) {
     console.error(
-      "ADMIN_USERNAME or ADMIN_SESSION_SECRET is missing.",
+      "ADMIN_USERNAME or ADMIN_SESSION_SECRET is missing."
     );
 
     return null;
@@ -77,25 +81,15 @@ function verifySessionToken(
     const decoded =
       Buffer.from(
         token,
-        "base64url",
+        "base64url"
       ).toString("utf8");
 
     const parts =
       decoded.split(":");
 
-    /*
-     * Login creates:
-     *
-     * username:issuedAt:signature
-     *
-     * Then the entire string is base64url encoded.
-     */
-
-    if (
-      parts.length !== 3
-    ) {
+    if (parts.length !== 3) {
       console.error(
-        "TASKS AUTH: Invalid token structure.",
+        "TASKS AUTH: Invalid token structure."
       );
 
       return null;
@@ -115,29 +109,25 @@ function verifySessionToken(
       return null;
     }
 
-    /* USERNAME */
-
     if (
       username !==
       ADMIN_USERNAME
     ) {
       console.error(
-        "TASKS AUTH: Username mismatch.",
+        "TASKS AUTH: Username mismatch."
       );
 
       return null;
     }
 
-    /* TIMESTAMP */
-
     const issuedAt =
       Number(
-        issuedAtString,
+        issuedAtString
       );
 
     if (
       !Number.isFinite(
-        issuedAt,
+        issuedAt
       )
     ) {
       return null;
@@ -146,11 +136,6 @@ function verifySessionToken(
     const now =
       Date.now();
 
-    /*
-     * Token cannot be issued
-     * more than 60 seconds in future.
-     */
-
     if (
       issuedAt >
       now + 60 * 1000
@@ -158,45 +143,39 @@ function verifySessionToken(
       return null;
     }
 
-    /*
-     * Token expires after 24 hours.
-     */
-
     if (
       now - issuedAt >
       SESSION_MAX_AGE_SECONDS *
         1000
     ) {
       console.error(
-        "TASKS AUTH: Session expired.",
+        "TASKS AUTH: Session expired."
       );
 
       return null;
     }
 
-    /* SIGNATURE */
-
     const expectedSignature =
       crypto
         .createHmac(
           "sha256",
-          ADMIN_SESSION_SECRET,
+          ADMIN_SESSION_SECRET
         )
         .update(
-          `${username}:${issuedAtString}`,
+          `${username}:${issuedAtString}`
         )
         .digest("base64url");
 
     const receivedBuffer =
       Buffer.from(
         signature,
-        "utf8",
+        "utf8"
       );
 
     const expectedBuffer =
       Buffer.from(
         expectedSignature,
-        "utf8",
+        "utf8"
       );
 
     if (
@@ -209,12 +188,12 @@ function verifySessionToken(
     const validSignature =
       crypto.timingSafeEqual(
         receivedBuffer,
-        expectedBuffer,
+        expectedBuffer
       );
 
     if (!validSignature) {
       console.error(
-        "TASKS AUTH: Signature mismatch.",
+        "TASKS AUTH: Signature mismatch."
       );
 
       return null;
@@ -227,7 +206,7 @@ function verifySessionToken(
   } catch (error) {
     console.error(
       "TASKS TOKEN VERIFY ERROR:",
-      error,
+      error
     );
 
     return null;
@@ -235,27 +214,27 @@ function verifySessionToken(
 }
 
 /* =========================================================
-   GET ADMIN SESSION FROM REQUEST
+   GET ADMIN SESSION
 ========================================================= */
 
 function getAdminSession(
-  request: NextRequest,
+  request: NextRequest
 ): AdminSession | null {
   const token =
     request.cookies.get(
-      SESSION_COOKIE_NAME,
+      SESSION_COOKIE_NAME
     )?.value;
 
   if (!token) {
     console.error(
-      "TASKS AUTH: Admin cookie not found.",
+      "TASKS AUTH: Admin cookie not found."
     );
 
     return null;
   }
 
   return verifySessionToken(
-    token,
+    token
   );
 }
 
@@ -266,7 +245,7 @@ function getAdminSession(
 function errorResponse(
   message: string,
   status: number,
-  details?: string,
+  details?: string
 ) {
   return NextResponse.json(
     {
@@ -282,7 +261,7 @@ function errorResponse(
         "Cache-Control":
           "no-store",
       },
-    },
+    }
   );
 }
 
@@ -291,35 +270,204 @@ function errorResponse(
 ========================================================= */
 
 function normalizeTask(
-  row: any,
+  row: any
 ) {
   return {
     ...row,
 
     package_amount:
       Number(
-        row.package_amount ?? 0,
+        row.package_amount ?? 0
       ),
 
     reward_amount:
       Number(
-        row.reward_amount ?? 0,
+        row.reward_amount ?? 0
       ),
 
     duration_hours:
       Number(
-        row.duration_hours ?? 24,
+        row.duration_hours ?? 24
       ),
 
     is_active:
       Boolean(
-        row.is_active,
+        row.is_active
       ),
 
     screenshot_required:
       Boolean(
-        row.screenshot_required,
+        row.screenshot_required
       ),
+
+    cycle_started_at:
+      row.cycle_started_at ??
+      null,
+  };
+}
+
+/* =========================================================
+   TASK SELECT
+========================================================= */
+
+const TASK_SELECT = `
+  id,
+  package_amount,
+  title,
+  description,
+  task_url,
+  reward_amount,
+  duration_hours,
+  screenshot_required,
+  is_active,
+  created_at,
+  expires_at,
+  updated_at,
+  available_from,
+  cycle_started_at
+`;
+
+/* =========================================================
+   GET GLOBAL CYCLE
+========================================================= */
+
+async function getGlobalCycle(
+  supabase: ReturnType<
+    typeof getSupabase
+  >
+) {
+  const {
+    data,
+    error,
+  } = await supabase
+    .from(
+      "task_cycle_settings"
+    )
+    .select(
+      "id, cycle_started_at, updated_at"
+    )
+    .eq(
+      "id",
+      1
+    )
+    .maybeSingle();
+
+  if (error) {
+    throw new Error(
+      error.message
+    );
+  }
+
+  /*
+   * If somehow the singleton row
+   * does not exist, create it.
+   */
+
+  if (
+    !data?.cycle_started_at
+  ) {
+    const now =
+      new Date().toISOString();
+
+    const {
+      data:
+        created,
+      error:
+        createError,
+    } = await supabase
+      .from(
+        "task_cycle_settings"
+      )
+      .upsert(
+        {
+          id: 1,
+
+          cycle_started_at:
+            now,
+
+          updated_at:
+            now,
+        },
+        {
+          onConflict:
+            "id",
+        }
+      )
+      .select(
+        "id, cycle_started_at, updated_at"
+      )
+      .single();
+
+    if (createError) {
+      throw new Error(
+        createError.message
+      );
+    }
+
+    return created;
+  }
+
+  return data;
+}
+
+/* =========================================================
+   CALCULATE CURRENT 24H CYCLE
+========================================================= */
+
+function calculateCycle(
+  anchorStartedAt: string
+) {
+  const anchorMs =
+    new Date(
+      anchorStartedAt
+    ).getTime();
+
+  const nowMs =
+    Date.now();
+
+  const elapsedMs =
+    nowMs - anchorMs;
+
+  const completedCycles =
+    Math.floor(
+      elapsedMs /
+        TASK_CYCLE_MS
+    );
+
+  const cycleStartedMs =
+    anchorMs +
+    completedCycles *
+      TASK_CYCLE_MS;
+
+  const cycleEndsMs =
+    cycleStartedMs +
+    TASK_CYCLE_MS;
+
+  const remainingSeconds =
+    Math.max(
+      0,
+      Math.floor(
+        (cycleEndsMs -
+          nowMs) /
+          1000
+      )
+    );
+
+  return {
+    startedAt:
+      new Date(
+        cycleStartedMs
+      ).toISOString(),
+
+    endsAt:
+      new Date(
+        cycleEndsMs
+      ).toISOString(),
+
+    remainingSeconds,
+
+    durationHours:
+      TASK_CYCLE_HOURS,
   };
 }
 
@@ -328,32 +476,32 @@ function normalizeTask(
 ========================================================= */
 
 export async function GET(
-  request: NextRequest,
+  request: NextRequest
 ) {
   try {
     const session =
       getAdminSession(
-        request,
+        request
       );
 
     if (!session) {
       return errorResponse(
         "Unauthorized",
-        401,
+        401
       );
     }
 
     const {
       searchParams,
     } = new URL(
-      request.url,
+      request.url
     );
 
     const status =
       String(
         searchParams.get(
-          "status",
-        ) ?? "all",
+          "status"
+        ) ?? "all"
       )
         .trim()
         .toLowerCase();
@@ -361,15 +509,15 @@ export async function GET(
     const packageAmount =
       String(
         searchParams.get(
-          "packageAmount",
-        ) ?? "all",
+          "packageAmount"
+        ) ?? "all"
       ).trim();
 
     const search =
       String(
         searchParams.get(
-          "search",
-        ) ?? "",
+          "search"
+        ) ?? ""
       )
         .trim()
         .toLowerCase();
@@ -378,30 +526,18 @@ export async function GET(
       getSupabase();
 
     let query = supabase
-      .from("package_tasks")
-      .select(`
-        id,
-        package_amount,
-        title,
-        description,
-        task_url,
-        reward_amount,
-        duration_hours,
-        screenshot_required,
-        is_active,
-        created_at,
-        expires_at,
-        updated_at,
-        available_from
-      `)
+      .from(
+        "package_tasks"
+      )
+      .select(
+        TASK_SELECT
+      )
       .order(
         "created_at",
         {
           ascending: false,
-        },
+        }
       );
-
-    /* STATUS */
 
     if (
       status === "active" ||
@@ -410,11 +546,9 @@ export async function GET(
       query =
         query.eq(
           "is_active",
-          status === "active",
+          status === "active"
         );
     }
-
-    /* PACKAGE AMOUNT */
 
     if (
       packageAmount &&
@@ -422,18 +556,18 @@ export async function GET(
     ) {
       const amount =
         Number(
-          packageAmount,
+          packageAmount
         );
 
       if (
         Number.isFinite(
-          amount,
+          amount
         )
       ) {
         query =
           query.eq(
             "package_amount",
-            amount,
+            amount
           );
       }
     }
@@ -446,54 +580,50 @@ export async function GET(
     if (error) {
       console.error(
         "ADMIN TASKS GET DATABASE ERROR:",
-        error,
+        error
       );
 
       return errorResponse(
         "Failed to load tasks.",
         500,
-        error.message,
+        error.message
       );
     }
 
     let tasks =
       (data ?? []).map(
-        normalizeTask,
+        normalizeTask
       );
-
-    /* SEARCH */
 
     if (search) {
       tasks =
         tasks.filter(
           (task) =>
             String(
-              task.title,
+              task.title
             )
               .toLowerCase()
               .includes(
-                search,
+                search
               ) ||
             String(
               task.description ??
-                "",
+                ""
             )
               .toLowerCase()
               .includes(
-                search,
+                search
               ) ||
             String(
               task.task_url ??
-                "",
+                ""
             )
               .toLowerCase()
               .includes(
-                search,
-              ),
+                search
+              )
         );
     }
-
-    /* SUMMARY */
 
     const summary = {
       total:
@@ -502,31 +632,29 @@ export async function GET(
       active:
         tasks.filter(
           (task) =>
-            task.is_active,
+            task.is_active
         ).length,
 
       inactive:
         tasks.filter(
           (task) =>
-            !task.is_active,
+            !task.is_active
         ).length,
 
       totalRewards:
         tasks.reduce(
           (
             sum,
-            task,
+            task
           ) =>
             sum +
             Number(
               task.reward_amount ||
-                0,
+                0
             ),
-          0,
+          0
         ),
     };
-
-    /* PACKAGE AMOUNTS */
 
     const packageAmounts =
       Array.from(
@@ -535,20 +663,36 @@ export async function GET(
             .map(
               (task) =>
                 Number(
-                  task.package_amount,
-                ),
+                  task.package_amount
+                )
             )
             .filter(
               (amount) =>
-                amount > 0,
-            ),
-        ),
+                amount > 0
+            )
+        )
       ).sort(
         (
           a,
-          b,
+          b
         ) =>
-          a - b,
+          a - b
+      );
+
+    /*
+     * IMPORTANT:
+     * Global cycle comes from
+     * task_cycle_settings.
+     */
+
+    const cycleSetting =
+      await getGlobalCycle(
+        supabase
+      );
+
+    const cycle =
+      calculateCycle(
+        cycleSetting.cycle_started_at
       );
 
     return NextResponse.json(
@@ -567,19 +711,37 @@ export async function GET(
         summary,
 
         packageAmounts,
+
+        cycle: {
+          startedAt:
+            cycle.startedAt,
+
+          endsAt:
+            cycle.endsAt,
+
+          durationHours:
+            cycle.durationHours,
+
+          remainingSeconds:
+            cycle.remainingSeconds,
+
+          anchorStartedAt:
+            cycleSetting.cycle_started_at,
+        },
       },
       {
         status: 200,
+
         headers: {
           "Cache-Control":
             "no-store, no-cache, must-revalidate",
         },
-      },
+      }
     );
   } catch (error) {
     console.error(
       "ADMIN TASKS GET ERROR:",
-      error,
+      error
     );
 
     return errorResponse(
@@ -587,67 +749,242 @@ export async function GET(
       500,
       error instanceof Error
         ? error.message
-        : undefined,
+        : undefined
     );
   }
 }
 
 /* =========================================================
    POST
+   CREATE TASK
+   OR
+   GLOBAL TIME REFRESH
 ========================================================= */
 
 export async function POST(
-  request: NextRequest,
+  request: NextRequest
 ) {
   try {
     const session =
       getAdminSession(
-        request,
+        request
       );
 
     if (!session) {
       return errorResponse(
         "Unauthorized",
-        401,
+        401
       );
     }
 
     const body =
       await request.json();
 
+    const supabase =
+      getSupabase();
+
+    /* =====================================================
+       GLOBAL TIME REFRESH
+    ===================================================== */
+
+    if (
+      body.action ===
+      "refresh_cycle"
+    ) {
+      const now =
+        new Date().toISOString();
+
+      /*
+       * THIS IS THE IMPORTANT PART.
+       *
+       * We update the global singleton.
+       *
+       * User RPC:
+       * get_my_tasks()
+       * submit_package_task()
+       *
+       * already read from this table.
+       *
+       * Therefore ALL users get the
+       * new cycle immediately.
+       */
+
+      const {
+        data:
+          cycleData,
+        error:
+          cycleError,
+      } = await supabase
+        .from(
+          "task_cycle_settings"
+        )
+        .upsert(
+          {
+            id: 1,
+
+            cycle_started_at:
+              now,
+
+            updated_at:
+              now,
+          },
+          {
+            onConflict:
+              "id",
+          }
+        )
+        .select(
+          "id, cycle_started_at, updated_at"
+        )
+        .single();
+
+      if (cycleError) {
+        console.error(
+          "GLOBAL CYCLE REFRESH ERROR:",
+          cycleError
+        );
+
+        return errorResponse(
+          "সময় Refresh করা যায়নি।",
+          500,
+          cycleError.message
+        );
+      }
+
+      /*
+       * Keep package_tasks.cycle_started_at
+       * synchronized too, because the Admin
+       * page displays it.
+       *
+       * This does NOT control the User RPC.
+       * The global singleton above controls it.
+       */
+
+      const {
+        data:
+          updatedTasks,
+        error:
+          taskCycleError,
+      } = await supabase
+        .from(
+          "package_tasks"
+        )
+        .update({
+          cycle_started_at:
+            now,
+
+          duration_hours:
+            24,
+
+          updated_at:
+            now,
+        })
+        .eq(
+          "is_active",
+          true
+        )
+        .select(
+          "id"
+        );
+
+      if (taskCycleError) {
+        console.error(
+          "TASK CYCLE MIRROR UPDATE ERROR:",
+          taskCycleError
+        );
+
+        /*
+         * Global cycle is already
+         * successfully updated.
+         *
+         * Do not fail the refresh
+         * because this mirror update
+         * failed.
+         */
+      }
+
+      const cycle =
+        calculateCycle(
+          cycleData.cycle_started_at
+        );
+
+      return NextResponse.json(
+        {
+          success: true,
+
+          authenticated: true,
+
+          message:
+            "সব Active Task-এর 24 ঘণ্টার global cycle একসাথে শুরু হয়েছে।",
+
+          cycle: {
+            startedAt:
+              cycle.startedAt,
+
+            endsAt:
+              cycle.endsAt,
+
+            durationHours:
+              24,
+
+            remainingSeconds:
+              cycle.remainingSeconds,
+
+            taskCount:
+              updatedTasks?.length ??
+              0,
+          },
+        },
+        {
+          status: 200,
+
+          headers: {
+            "Cache-Control":
+              "no-store",
+          },
+        }
+      );
+    }
+
+    /* =====================================================
+       NORMAL CREATE TASK
+    ===================================================== */
+
     const packageAmount =
       Number(
-        body.packageAmount,
+        body.packageAmount
       );
 
     const title =
       String(
-        body.title ?? "",
+        body.title ?? ""
       ).trim();
 
     const description =
       String(
-        body.description ?? "",
+        body.description ?? ""
       ).trim();
 
     const taskUrl =
       String(
-        body.taskUrl ?? "",
+        body.taskUrl ?? ""
       ).trim();
 
     const rewardAmount =
       Number(
-        body.rewardAmount,
+        body.rewardAmount
       );
 
+    /*
+     * FIXED 24 HOURS
+     */
+
     const durationHours =
-      Number(
-        body.durationHours,
-      );
+      24;
 
     const screenshotRequired =
       Boolean(
-        body.screenshotRequired,
+        body.screenshotRequired
       );
 
     const isActive =
@@ -656,77 +993,84 @@ export async function POST(
     const availableFrom =
       body.availableFrom
         ? String(
-            body.availableFrom,
+            body.availableFrom
           )
         : null;
 
     const expiresAt =
       body.expiresAt
         ? String(
-            body.expiresAt,
+            body.expiresAt
           )
         : null;
 
-    /* VALIDATION */
-
     if (
       !Number.isFinite(
-        packageAmount,
+        packageAmount
       ) ||
       packageAmount <= 0
     ) {
       return errorResponse(
         "Valid package amount is required.",
-        400,
+        400
       );
     }
 
     if (!title) {
       return errorResponse(
         "Task title is required.",
-        400,
+        400
       );
     }
 
     if (!taskUrl) {
       return errorResponse(
         "Task URL is required.",
-        400,
+        400
       );
     }
 
     if (
       !Number.isFinite(
-        rewardAmount,
+        rewardAmount
       ) ||
       rewardAmount < 0
     ) {
       return errorResponse(
         "Valid reward amount is required.",
-        400,
+        400
       );
     }
 
-    if (
-      !Number.isFinite(
-        durationHours,
-      ) ||
-      durationHours <= 0
-    ) {
-      return errorResponse(
-        "Duration must be greater than 0 hours.",
-        400,
-      );
-    }
+    /*
+     * Get current global cycle.
+     *
+     * Newly-created active tasks join
+     * the CURRENT global cycle.
+     */
 
-    const supabase =
-      getSupabase();
+    const cycleSetting =
+      await getGlobalCycle(
+        supabase
+      );
+
+    const currentCycle =
+      calculateCycle(
+        cycleSetting.cycle_started_at
+      );
+
+    const cycleStartedAt =
+      isActive
+        ? currentCycle.startedAt
+        : null;
 
     const {
       data,
       error,
     } = await supabase
-      .from("package_tasks")
+      .from(
+        "package_tasks"
+      )
       .insert({
         package_amount:
           packageAmount,
@@ -734,7 +1078,8 @@ export async function POST(
         title,
 
         description:
-          description || null,
+          description ||
+          null,
 
         task_url:
           taskUrl,
@@ -756,61 +1101,54 @@ export async function POST(
 
         expires_at:
           expiresAt,
+
+        cycle_started_at:
+          cycleStartedAt,
       })
-      .select(`
-        id,
-        package_amount,
-        title,
-        description,
-        task_url,
-        reward_amount,
-        duration_hours,
-        screenshot_required,
-        is_active,
-        created_at,
-        expires_at,
-        updated_at,
-        available_from
-      `)
+      .select(
+        TASK_SELECT
+      )
       .maybeSingle();
 
     if (error) {
       console.error(
         "CREATE TASK ERROR:",
-        error,
+        error
       );
 
       return errorResponse(
         "Failed to create task.",
         500,
-        error.message,
+        error.message
       );
     }
 
     return NextResponse.json(
       {
         success: true,
+
         authenticated: true,
 
         task:
           data
             ? normalizeTask(
-                data,
+                data
               )
             : null,
       },
       {
         status: 201,
+
         headers: {
           "Cache-Control":
             "no-store",
         },
-      },
+      }
     );
   } catch (error) {
     console.error(
       "ADMIN TASK POST ERROR:",
-      error,
+      error
     );
 
     return errorResponse(
@@ -818,7 +1156,7 @@ export async function POST(
       500,
       error instanceof Error
         ? error.message
-        : undefined,
+        : undefined
     );
   }
 }
@@ -828,18 +1166,18 @@ export async function POST(
 ========================================================= */
 
 export async function PATCH(
-  request: NextRequest,
+  request: NextRequest
 ) {
   try {
     const session =
       getAdminSession(
-        request,
+        request
       );
 
     if (!session) {
       return errorResponse(
         "Unauthorized",
-        401,
+        401
       );
     }
 
@@ -848,15 +1186,18 @@ export async function PATCH(
 
     const taskId =
       String(
-        body.taskId ?? "",
+        body.taskId ?? ""
       ).trim();
 
     if (!taskId) {
       return errorResponse(
         "Task ID is required.",
-        400,
+        400
       );
     }
+
+    const supabase =
+      getSupabase();
 
     const updates: Record<
       string,
@@ -869,18 +1210,18 @@ export async function PATCH(
     ) {
       const value =
         Number(
-          body.packageAmount,
+          body.packageAmount
         );
 
       if (
         !Number.isFinite(
-          value,
+          value
         ) ||
         value <= 0
       ) {
         return errorResponse(
           "Invalid package amount.",
-          400,
+          400
         );
       }
 
@@ -894,13 +1235,13 @@ export async function PATCH(
     ) {
       const value =
         String(
-          body.title,
+          body.title
         ).trim();
 
       if (!value) {
         return errorResponse(
           "Task title is required.",
-          400,
+          400
         );
       }
 
@@ -914,7 +1255,7 @@ export async function PATCH(
     ) {
       const value =
         String(
-          body.description ?? "",
+          body.description ?? ""
         ).trim();
 
       updates.description =
@@ -927,13 +1268,13 @@ export async function PATCH(
     ) {
       const value =
         String(
-          body.taskUrl,
+          body.taskUrl
         ).trim();
 
       if (!value) {
         return errorResponse(
           "Task URL is required.",
-          400,
+          400
         );
       }
 
@@ -947,18 +1288,18 @@ export async function PATCH(
     ) {
       const value =
         Number(
-          body.rewardAmount,
+          body.rewardAmount
         );
 
       if (
         !Number.isFinite(
-          value,
+          value
         ) ||
         value < 0
       ) {
         return errorResponse(
           "Invalid reward amount.",
-          400,
+          400
         );
       }
 
@@ -966,30 +1307,12 @@ export async function PATCH(
         value;
     }
 
-    if (
-      body.durationHours !==
-      undefined
-    ) {
-      const value =
-        Number(
-          body.durationHours,
-        );
+    /*
+     * ALWAYS 24 HOURS
+     */
 
-      if (
-        !Number.isFinite(
-          value,
-        ) ||
-        value <= 0
-      ) {
-        return errorResponse(
-          "Invalid duration.",
-          400,
-        );
-      }
-
-      updates.duration_hours =
-        value;
-    }
+    updates.duration_hours =
+      24;
 
     if (
       body.screenshotRequired !==
@@ -997,7 +1320,7 @@ export async function PATCH(
     ) {
       updates.screenshot_required =
         Boolean(
-          body.screenshotRequired,
+          body.screenshotRequired
         );
     }
 
@@ -1005,10 +1328,33 @@ export async function PATCH(
       body.isActive !==
       undefined
     ) {
-      updates.is_active =
+      const newActive =
         Boolean(
-          body.isActive,
+          body.isActive
         );
+
+      updates.is_active =
+        newActive;
+
+      /*
+       * If activating an old task,
+       * put it into CURRENT global cycle.
+       */
+
+      if (newActive) {
+        const cycleSetting =
+          await getGlobalCycle(
+            supabase
+          );
+
+        const currentCycle =
+          calculateCycle(
+            cycleSetting.cycle_started_at
+          );
+
+        updates.cycle_started_at =
+          currentCycle.startedAt;
+      }
     }
 
     if (
@@ -1018,7 +1364,7 @@ export async function PATCH(
       updates.available_from =
         body.availableFrom
           ? String(
-              body.availableFrom,
+              body.availableFrom
             )
           : null;
     }
@@ -1030,7 +1376,7 @@ export async function PATCH(
       updates.expires_at =
         body.expiresAt
           ? String(
-              body.expiresAt,
+              body.expiresAt
             )
           : null;
     }
@@ -1038,78 +1384,67 @@ export async function PATCH(
     updates.updated_at =
       new Date().toISOString();
 
-    const supabase =
-      getSupabase();
-
     const {
       data,
       error,
     } = await supabase
-      .from("package_tasks")
+      .from(
+        "package_tasks"
+      )
       .update(updates)
       .eq(
         "id",
-        taskId,
+        taskId
       )
-      .select(`
-        id,
-        package_amount,
-        title,
-        description,
-        task_url,
-        reward_amount,
-        duration_hours,
-        screenshot_required,
-        is_active,
-        created_at,
-        expires_at,
-        updated_at,
-        available_from
-      `)
+      .select(
+        TASK_SELECT
+      )
       .maybeSingle();
 
     if (error) {
       console.error(
         "UPDATE TASK ERROR:",
-        error,
+        error
       );
 
       return errorResponse(
         "Failed to update task.",
         500,
-        error.message,
+        error.message
       );
     }
 
     if (!data) {
       return errorResponse(
         "Task not found.",
-        404,
+        404
       );
     }
 
     return NextResponse.json(
       {
         success: true,
+
         authenticated: true,
 
         task:
           normalizeTask(
-            data,
+            data
           ),
       },
       {
         status: 200,
+
         headers: {
           "Cache-Control":
             "no-store",
         },
-      },
+      }
     );
   } catch (error) {
     console.error(
       "ADMIN TASK PATCH ERROR:",
-      error,
+      error
     );
 
     return errorResponse(
@@ -1117,7 +1452,7 @@ export async function PATCH(
       500,
       error instanceof Error
         ? error.message
-        : undefined,
+        : undefined
     );
   }
 }
@@ -1127,45 +1462,47 @@ export async function PATCH(
 ========================================================= */
 
 export async function DELETE(
-  request: NextRequest,
+  request: NextRequest
 ) {
   try {
     const session =
       getAdminSession(
-        request,
+        request
       );
 
     if (!session) {
       return errorResponse(
         "Unauthorized",
-        401,
+        401
       );
     }
 
     const {
       searchParams,
     } = new URL(
-      request.url,
+      request.url
     );
 
     const taskId =
       String(
         searchParams.get(
-          "taskId",
-        ) ?? "",
+          "taskId"
+        ) ?? ""
       ).trim();
 
     if (!taskId) {
       return errorResponse(
         "Task ID is required.",
-        400,
+        400
       );
     }
 
     const supabase =
       getSupabase();
 
-    /* CHECK SUBMISSIONS */
+    /* =====================================================
+       CHECK SUBMISSIONS
+    ===================================================== */
 
     const {
       data:
@@ -1174,25 +1511,27 @@ export async function DELETE(
         submissionError,
     } = await supabase
       .from(
-        "package_task_submissions",
+        "package_task_submissions"
       )
-      .select("id")
+      .select(
+        "id"
+      )
       .eq(
         "task_id",
-        taskId,
+        taskId
       )
       .limit(1);
 
     if (submissionError) {
       console.error(
         "CHECK TASK SUBMISSIONS ERROR:",
-        submissionError,
+        submissionError
       );
 
       return errorResponse(
         "Could not check task submissions.",
         500,
-        submissionError.message,
+        submissionError.message
       );
     }
 
@@ -1205,61 +1544,65 @@ export async function DELETE(
       return NextResponse.json(
         {
           success: false,
+
           error:
             "This task already has submissions. Deactivate it instead of deleting it.",
         },
         {
           status: 409,
+
           headers: {
             "Cache-Control":
               "no-store",
           },
-        },
+        }
       );
     }
-
-    /* DELETE */
 
     const {
       error,
     } = await supabase
-      .from("package_tasks")
+      .from(
+        "package_tasks"
+      )
       .delete()
       .eq(
         "id",
-        taskId,
+        taskId
       );
 
     if (error) {
       console.error(
         "DELETE TASK ERROR:",
-        error,
+        error
       );
 
       return errorResponse(
         "Failed to delete task.",
         500,
-        error.message,
+        error.message
       );
     }
 
     return NextResponse.json(
       {
         success: true,
+
         authenticated: true,
       },
       {
         status: 200,
+
         headers: {
           "Cache-Control":
             "no-store",
         },
-      },
+      }
     );
   } catch (error) {
     console.error(
       "ADMIN TASK DELETE ERROR:",
-      error,
+      error
     );
 
     return errorResponse(
@@ -1267,7 +1610,7 @@ export async function DELETE(
       500,
       error instanceof Error
         ? error.message
-        : undefined,
+        : undefined
     );
   }
 }

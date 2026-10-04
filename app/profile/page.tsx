@@ -141,33 +141,32 @@ export default function ProfilePage() {
   const [showReferralDetails, setShowReferralDetails] =
     useState(false);
 
-  const commissionLevels: CommissionLevel[] = [
-    {
-      generation: "১ম জেনারেশন",
-      rate: "15%",
-      description: "সরাসরি আপনার রেফারেল",
-      color: "bg-purple-50 text-purple-700 border-purple-100",
-    },
-    {
-      generation: "২য় জেনারেশন",
-      rate: "4%",
-      description: "আপনার ১ম জেনারেশনের রেফারেল",
-      color: "bg-blue-50 text-blue-700 border-blue-100",
-    },
-    {
-      generation: "৩য় জেনারেশন",
-      rate: "2%",
-      description: "আপনার ২য় জেনারেশনের রেফারেল",
-      color: "bg-green-50 text-green-700 border-green-100",
-    },
-    {
-      generation: "৪র্থ+ জেনারেশন",
-      rate: "1%",
-      description: "৪র্থ ও তার পরের সব জেনারেশন",
-      color: "bg-orange-50 text-orange-700 border-orange-100",
-    },
-  ];
-
+ const commissionLevels: CommissionLevel[] = [
+  {
+    generation: "১ম জেনারেশন",
+    rate: "10%",
+    description: "সরাসরি আপনার রেফারেল",
+    color: "bg-purple-50 text-purple-700 border-purple-100",
+  },
+  {
+    generation: "২য় জেনারেশন",
+    rate: "3%",
+    description: "আপনার ১ম জেনারেশনের রেফারেল",
+    color: "bg-blue-50 text-blue-700 border-blue-100",
+  },
+  {
+    generation: "৩য় জেনারেশন",
+    rate: "1%",
+    description: "আপনার ২য় জেনারেশনের রেফারেল",
+    color: "bg-green-50 text-green-700 border-green-100",
+  },
+  {
+    generation: "৪র্থ+ জেনারেশন",
+    rate: "0%",
+    description: "৪র্থ ও তার পরের কোনো জেনারেশনে কমিশন নেই",
+    color: "bg-orange-50 text-orange-700 border-orange-100",
+  },
+];
   useEffect(() => {
     loadProfile();
   }, []);

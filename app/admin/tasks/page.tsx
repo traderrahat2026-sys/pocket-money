@@ -3,6 +3,7 @@
 import {
   useCallback,
   useEffect,
+  useMemo,
   useState,
 } from "react";
 
@@ -22,6 +23,7 @@ type Task = {
   expires_at: string | null;
   updated_at: string;
   available_from: string | null;
+  cycle_started_at: string | null;
 };
 
 type Summary = {
@@ -31,6 +33,12 @@ type Summary = {
   totalRewards: number;
 };
 
+type CycleData = {
+  startedAt: string | null;
+  endsAt: string | null;
+  durationHours: number;
+};
+
 const emptySummary: Summary = {
   total: 0,
   active: 0,
@@ -38,27 +46,59 @@ const emptySummary: Summary = {
   totalRewards: 0,
 };
 
-function money(
-  value: number
-) {
-  return `৳${Number(
-    value || 0
-  ).toLocaleString("en-BD", {
-    maximumFractionDigits: 2,
-  })}`;
+const emptyCycle: CycleData = {
+  startedAt: null,
+  endsAt: null,
+  durationHours: 24,
+};
+
+function money(value: number) {
+  return `৳${Number(value || 0).toLocaleString(
+    "en-BD",
+    {
+      maximumFractionDigits: 2,
+    }
+  )}`;
 }
 
-function dateTime(
-  value: string | null
-) {
+function dateTime(value: string | null) {
   if (!value) return "—";
 
-  return new Date(
-    value
-  ).toLocaleString("en-BD", {
-    dateStyle: "medium",
-    timeStyle: "short",
-  });
+  return new Date(value).toLocaleString(
+    "en-BD",
+    {
+      dateStyle: "medium",
+      timeStyle: "short",
+    }
+  );
+}
+
+function formatCountdown(totalSeconds: number) {
+  const seconds = Math.max(
+    0,
+    Math.floor(totalSeconds)
+  );
+
+  const hours = Math.floor(
+    seconds / 3600
+  );
+
+  const minutes = Math.floor(
+    (seconds % 3600) / 60
+  );
+
+  const secs = seconds % 60;
+
+  return `${String(hours).padStart(
+    2,
+    "0"
+  )}:${String(minutes).padStart(
+    2,
+    "0"
+  )}:${String(secs).padStart(
+    2,
+    "0"
+  )}`;
 }
 
 export default function TasksPage() {
@@ -74,6 +114,23 @@ export default function TasksPage() {
     packageAmounts,
     setPackageAmounts,
   ] = useState<number[]>([]);
+
+  const [
+    cycle,
+    setCycle,
+  ] = useState<CycleData>(
+    emptyCycle
+  );
+
+  const [
+    countdown,
+    setCountdown,
+  ] = useState(0);
+
+  const [
+    refreshingCycle,
+    setRefreshingCycle,
+  ] = useState(false);
 
   const [
     statusFilter,
@@ -202,6 +259,11 @@ export default function TasksPage() {
           data.packageAmounts ??
             []
         );
+
+        setCycle(
+          data.cycle ??
+            emptyCycle
+        );
       } catch (err) {
         console.error(err);
 
@@ -233,6 +295,83 @@ export default function TasksPage() {
         timer
       );
   }, [loadTasks]);
+
+  /* =====================================================
+     LIVE GLOBAL CYCLE COUNTDOWN
+  ===================================================== */
+
+  useEffect(() => {
+    function updateCountdown() {
+      if (!cycle.endsAt) {
+        setCountdown(0);
+        return;
+      }
+
+      const end =
+        new Date(
+          cycle.endsAt
+        ).getTime();
+
+      const now =
+        Date.now();
+
+      const remaining =
+        Math.max(
+          0,
+          Math.floor(
+            (end - now) / 1000
+          )
+        );
+
+      setCountdown(
+        remaining
+      );
+    }
+
+    updateCountdown();
+
+    const timer =
+      window.setInterval(
+        updateCountdown,
+        1000
+      );
+
+    return () =>
+      window.clearInterval(
+        timer
+      );
+  }, [cycle.endsAt]);
+
+  /*
+   * When current cycle reaches zero,
+   * reload from server so the next 24-hour
+   * cycle is reflected.
+   */
+  useEffect(() => {
+    if (
+      !cycle.endsAt ||
+      countdown > 0
+    ) {
+      return;
+    }
+
+    const timer =
+      window.setTimeout(
+        () => {
+          loadTasks();
+        },
+        1200
+      );
+
+    return () =>
+      window.clearTimeout(
+        timer
+      );
+  }, [
+    countdown,
+    cycle.endsAt,
+    loadTasks,
+  ]);
 
   function resetForm() {
     setForm({
@@ -284,9 +423,7 @@ export default function TasksPage() {
         ),
 
       durationHours:
-        String(
-          task.duration_hours
-        ),
+        "24",
 
       screenshotRequired:
         task.screenshot_required,
@@ -356,6 +493,80 @@ export default function TasksPage() {
     return date.toISOString();
   }
 
+  /* =====================================================
+     GLOBAL TIME REFRESH
+  ===================================================== */
+
+  async function refreshTaskCycle() {
+    const confirmed =
+      window.confirm(
+        "সব Active Task-এর 24 ঘণ্টার নতুন cycle এখন শুরু হবে। আপনি কি নিশ্চিত?"
+      );
+
+    if (!confirmed) {
+      return;
+    }
+
+    try {
+      setRefreshingCycle(true);
+      setError("");
+      setSuccess("");
+
+      const response =
+        await fetch(
+          "/api/admin/tasks",
+          {
+            method: "POST",
+
+            headers: {
+              "Content-Type":
+                "application/json",
+            },
+
+            cache: "no-store",
+
+            body: JSON.stringify({
+              action:
+                "refresh_cycle",
+            }),
+          }
+        );
+
+      const data =
+        await response.json();
+
+      if (!response.ok) {
+        throw new Error(
+          data.error ||
+            "সময় Refresh করা যায়নি।"
+        );
+      }
+
+      setSuccess(
+        `সব Active Task-এর 24 ঘণ্টার cycle একসাথে শুরু হয়েছে। মোট ${Number(
+          data.cycle?.taskCount ??
+            0
+        ).toLocaleString(
+          "en-BD"
+        )}টি task যুক্ত হয়েছে।`
+      );
+
+      await loadTasks();
+    } catch (err) {
+      console.error(err);
+
+      setError(
+        err instanceof Error
+          ? err.message
+          : "সময় Refresh করা যায়নি।"
+      );
+    } finally {
+      setRefreshingCycle(
+        false
+      );
+    }
+  }
+
   async function saveTask() {
     const packageAmount =
       Number(
@@ -367,10 +578,11 @@ export default function TasksPage() {
         form.rewardAmount
       );
 
+    /*
+     * Fixed 24-hour cycle.
+     */
     const durationHours =
-      Number(
-        form.durationHours
-      );
+      24;
 
     if (
       !Number.isFinite(
@@ -410,18 +622,6 @@ export default function TasksPage() {
       return;
     }
 
-    if (
-      !Number.isFinite(
-        durationHours
-      ) ||
-      durationHours <= 0
-    ) {
-      setError(
-        "Duration must be greater than 0."
-      );
-      return;
-    }
-
     try {
       setSaving(true);
       setError("");
@@ -429,6 +629,7 @@ export default function TasksPage() {
 
       const payload = {
         packageAmount,
+
         title:
           form.title.trim(),
 
@@ -531,12 +732,15 @@ export default function TasksPage() {
           "/api/admin/tasks",
           {
             method: "PATCH",
+
             headers: {
               "Content-Type":
                 "application/json",
             },
+
             body: JSON.stringify({
               taskId: task.id,
+
               isActive:
                 !task.is_active,
             }),
@@ -557,6 +761,10 @@ export default function TasksPage() {
         !task.is_active
           ? "Task activated."
           : "Task deactivated."
+      );
+
+      setSelectedTask(
+        null
       );
 
       await loadTasks();
@@ -623,13 +831,47 @@ export default function TasksPage() {
     }
   }
 
+  const cycleStatus =
+    useMemo(() => {
+      if (!cycle.startedAt) {
+        return {
+          label:
+            "Cycle শুরু হয়নি",
+          tone:
+            "gray",
+        };
+      }
+
+      if (countdown <= 0) {
+        return {
+          label:
+            "Cycle শেষ",
+          tone:
+            "red",
+        };
+      }
+
+      return {
+        label:
+          "Cycle চলছে",
+        tone:
+          "green",
+      };
+    }, [
+      cycle.startedAt,
+      countdown,
+    ]);
+
   return (
     <AdminShell
       title="Tasks"
       description="Create and manage package-based earning tasks."
     >
       <div className="space-y-6">
-        {/* Header */}
+        {/* =================================================
+            HEADER
+        ================================================= */}
+
         <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
           <div>
             <h1 className="text-2xl font-black tracking-tight text-black sm:text-3xl">
@@ -641,7 +883,7 @@ export default function TasksPage() {
             </p>
           </div>
 
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2">
             <button
               type="button"
               onClick={() =>
@@ -655,6 +897,22 @@ export default function TasksPage() {
 
             <button
               type="button"
+              onClick={
+                refreshTaskCycle
+              }
+              disabled={
+                refreshingCycle ||
+                loading
+              }
+              className="h-11 rounded-xl bg-black px-4 text-sm font-black text-white shadow-sm hover:bg-black/85 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {refreshingCycle
+                ? "সময় Refresh হচ্ছে..."
+                : "🔄 সময় Refresh"}
+            </button>
+
+            <button
+              type="button"
               onClick={openCreate}
               className="h-11 rounded-xl bg-[#4f9d32] px-5 text-sm font-black text-white shadow-sm hover:bg-[#43872b]"
             >
@@ -663,7 +921,90 @@ export default function TasksPage() {
           </div>
         </div>
 
-        {/* Alerts */}
+        {/* =================================================
+            GLOBAL CYCLE CARD
+        ================================================= */}
+
+        <div className="overflow-hidden rounded-2xl border border-black/[0.07] bg-white shadow-sm">
+          <div className="flex flex-col gap-5 p-5 lg:flex-row lg:items-center lg:justify-between">
+            <div>
+              <div className="flex flex-wrap items-center gap-2">
+                <p className="text-xs font-black uppercase tracking-widest text-black/35">
+                  Global Task Cycle
+                </p>
+
+                <span
+                  className={`rounded-full px-2.5 py-1 text-[10px] font-black ${
+                    cycleStatus.tone ===
+                    "green"
+                      ? "bg-emerald-50 text-emerald-700"
+                      : cycleStatus.tone ===
+                        "red"
+                      ? "bg-red-50 text-red-700"
+                      : "bg-black/[0.05] text-black/45"
+                  }`}
+                >
+                  {cycleStatus.label}
+                </span>
+              </div>
+
+              <h2 className="mt-2 text-xl font-black text-black">
+                24 ঘণ্টার Task Cycle
+              </h2>
+
+              <p className="mt-1 max-w-2xl text-sm font-semibold leading-6 text-black/45">
+                সময় Refresh চাপলে সব Active Task একই সময়ে নতুন 24 ঘণ্টার cycle শুরু করবে।
+              </p>
+            </div>
+
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3 lg:min-w-[600px]">
+              <CycleBox
+                label="Cycle শুরু"
+                value={dateTime(
+                  cycle.startedAt
+                )}
+              />
+
+              <CycleBox
+                label="Cycle শেষ"
+                value={dateTime(
+                  cycle.endsAt
+                )}
+              />
+
+              <div className="rounded-xl bg-black p-4 text-white">
+                <p className="text-[10px] font-black uppercase tracking-wider text-white/45">
+                  বাকি সময়
+                </p>
+
+                <p className="mt-2 font-mono text-2xl font-black tracking-tight">
+                  {formatCountdown(
+                    countdown
+                  )}
+                </p>
+
+                <p className="mt-1 text-[10px] font-bold text-white/40">
+                  HH : MM : SS
+                </p>
+              </div>
+            </div>
+          </div>
+
+          {!cycle.startedAt && (
+            <div className="border-t border-amber-100 bg-amber-50 px-5 py-3 text-sm font-bold text-amber-800">
+              এখনো কোনো global cycle শুরু হয়নি। সব task তৈরি করার পর{" "}
+              <span className="font-black">
+                🔄 সময় Refresh
+              </span>{" "}
+              চাপুন।
+            </div>
+          )}
+        </div>
+
+        {/* =================================================
+            ALERTS
+        ================================================= */}
+
         {error && (
           <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-bold text-red-700">
             {error}
@@ -676,7 +1017,10 @@ export default function TasksPage() {
           </div>
         )}
 
-        {/* Summary */}
+        {/* =================================================
+            SUMMARY
+        ================================================= */}
+
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
           <SummaryCard
             title="Total Tasks"
@@ -712,7 +1056,10 @@ export default function TasksPage() {
           />
         </div>
 
-        {/* Filters */}
+        {/* =================================================
+            FILTERS
+        ================================================= */}
+
         <div className="rounded-2xl border border-black/[0.07] bg-white p-4 shadow-sm">
           <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
             <input
@@ -775,7 +1122,10 @@ export default function TasksPage() {
           </div>
         </div>
 
-        {/* Tasks */}
+        {/* =================================================
+            TASK TABLE
+        ================================================= */}
+
         <div className="overflow-hidden rounded-2xl border border-black/[0.07] bg-white shadow-sm">
           <div className="overflow-x-auto">
             <table className="min-w-[1200px] w-full">
@@ -869,7 +1219,10 @@ export default function TasksPage() {
         </div>
       </div>
 
-      {/* Create / Edit Modal */}
+      {/* =================================================
+          CREATE / EDIT MODAL
+      ================================================= */}
+
       {showForm && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/55 p-4 backdrop-blur-sm">
           <div className="max-h-[94vh] w-full max-w-2xl overflow-y-auto rounded-3xl bg-white shadow-2xl">
@@ -932,21 +1285,19 @@ export default function TasksPage() {
                   type="number"
                 />
 
-                <Field
-                  label="Duration (Hours)"
-                  value={
-                    form.durationHours
-                  }
-                  onChange={(value) =>
-                    setForm({
-                      ...form,
-                      durationHours:
-                        value,
-                    })
-                  }
-                  placeholder="24"
-                  type="number"
-                />
+                <div>
+                  <label className="mb-2 block text-xs font-black uppercase tracking-wider text-black/40">
+                    Duration
+                  </label>
+
+                  <div className="flex h-11 items-center rounded-xl border border-black/10 bg-black/[0.04] px-4 text-sm font-black text-black/65">
+                    24 Hours
+                  </div>
+
+                  <p className="mt-1 text-[11px] font-semibold text-black/35">
+                    সব task-এর cycle এখন fixed 24 ঘণ্টা।
+                  </p>
+                </div>
 
                 <Field
                   label="Task URL"
@@ -1065,6 +1416,21 @@ export default function TasksPage() {
                 />
               </div>
 
+              <div className="rounded-2xl border border-blue-100 bg-blue-50 p-4">
+                <p className="text-sm font-black text-blue-800">
+                  24 ঘণ্টার Cycle নিয়ম
+                </p>
+
+                <p className="mt-1 text-xs font-semibold leading-5 text-blue-700/80">
+                  সব task একই global cycle অনুসরণ করবে। Admin
+                  <span className="font-black">
+                    {" "}
+                    🔄 সময় Refresh
+                  </span>{" "}
+                  চাপলে সব Active Task-এর countdown একই সময়ে শুরু হবে।
+                </p>
+              </div>
+
               <div className="flex flex-col-reverse gap-3 border-t border-black/[0.06] pt-5 sm:flex-row sm:justify-end">
                 <button
                   type="button"
@@ -1096,7 +1462,10 @@ export default function TasksPage() {
         </div>
       )}
 
-      {/* Details Modal */}
+      {/* =================================================
+          DETAILS MODAL
+      ================================================= */}
+
       {selectedTask && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/55 p-4 backdrop-blur-sm">
           <div className="max-h-[92vh] w-full max-w-2xl overflow-y-auto rounded-3xl bg-white shadow-2xl">
@@ -1142,7 +1511,7 @@ export default function TasksPage() {
 
                 <Detail
                   label="Duration"
-                  value={`${selectedTask.duration_hours}h`}
+                  value="24 Hours"
                 />
 
                 <Detail
@@ -1184,6 +1553,32 @@ export default function TasksPage() {
               </div>
 
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <Detail
+                  label="Global Cycle Start"
+                  value={dateTime(
+                    selectedTask.cycle_started_at
+                  )}
+                />
+
+                <Detail
+                  label="Global Cycle End"
+                  value={
+                    selectedTask.cycle_started_at
+                      ? dateTime(
+                          new Date(
+                            new Date(
+                              selectedTask.cycle_started_at
+                            ).getTime() +
+                              24 *
+                                60 *
+                                60 *
+                                1000
+                          ).toISOString()
+                        )
+                      : "—"
+                  }
+                />
+
                 <Detail
                   label="Available From"
                   value={dateTime(
@@ -1234,6 +1629,7 @@ export default function TasksPage() {
                     setSelectedTask(
                       null
                     );
+
                     openEdit(
                       selectedTask
                     );
@@ -1265,6 +1661,10 @@ export default function TasksPage() {
   );
 }
 
+/* =========================================================
+   SUMMARY CARD
+========================================================= */
+
 function SummaryCard({
   title,
   value,
@@ -1285,10 +1685,13 @@ function SummaryCard({
   const classes = {
     black:
       "bg-black text-white",
+
     green:
       "bg-emerald-100 text-emerald-700",
+
     gray:
       "bg-black/[0.06] text-black/50",
+
     amber:
       "bg-amber-100 text-amber-700",
   };
@@ -1324,6 +1727,34 @@ function SummaryCard({
     </div>
   );
 }
+
+/* =========================================================
+   CYCLE BOX
+========================================================= */
+
+function CycleBox({
+  label,
+  value,
+}: {
+  label: string;
+  value: string;
+}) {
+  return (
+    <div className="rounded-xl bg-[#f8faf8] p-4">
+      <p className="text-[10px] font-black uppercase tracking-wider text-black/30">
+        {label}
+      </p>
+
+      <p className="mt-2 text-sm font-black leading-5 text-black/70">
+        {value}
+      </p>
+    </div>
+  );
+}
+
+/* =========================================================
+   TASK ROW
+========================================================= */
 
 function TaskRow({
   task,
@@ -1374,22 +1805,32 @@ function TaskRow({
       </td>
 
       <td className="px-5 py-4 text-sm font-bold text-black/55">
-        {task.duration_hours} hours
+        24 hours
       </td>
 
       <td className="px-5 py-4">
         <p className="text-xs font-semibold text-black/50">
-          From:{" "}
+          Cycle:{" "}
           {dateTime(
-            task.available_from
+            task.cycle_started_at
           )}
         </p>
 
         <p className="mt-1 text-xs font-semibold text-black/40">
-          Until:{" "}
-          {dateTime(
-            task.expires_at
-          )}
+          Ends:{" "}
+          {task.cycle_started_at
+            ? dateTime(
+                new Date(
+                  new Date(
+                    task.cycle_started_at
+                  ).getTime() +
+                    24 *
+                      60 *
+                      60 *
+                      1000
+                ).toISOString()
+              )
+            : "—"}
         </p>
       </td>
 
@@ -1444,6 +1885,10 @@ function TaskRow({
   );
 }
 
+/* =========================================================
+   FIELD
+========================================================= */
+
 function Field({
   label,
   value,
@@ -1479,6 +1924,10 @@ function Field({
     </div>
   );
 }
+
+/* =========================================================
+   TOGGLE
+========================================================= */
 
 function Toggle({
   label,
@@ -1528,6 +1977,10 @@ function Toggle({
   );
 }
 
+/* =========================================================
+   DETAIL
+========================================================= */
+
 function Detail({
   label,
   value,
@@ -1547,6 +2000,10 @@ function Detail({
     </div>
   );
 }
+
+/* =========================================================
+   LOADING ROWS
+========================================================= */
 
 function LoadingRows() {
   return (

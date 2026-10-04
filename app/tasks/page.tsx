@@ -1,13 +1,16 @@
 "use client";
 
-import Link from "next/link";
 import {
-  ChangeEvent,
   useCallback,
   useEffect,
+  useMemo,
+  useRef,
   useState,
 } from "react";
+import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
+
 import Header from "@/components/Header";
 import BottomNav from "@/components/BottomNav";
 
@@ -30,1409 +33,1802 @@ type Task = {
   expires_at: string;
   remaining_seconds: number;
   submission_status: SubmissionStatus;
+
+  /*
+   * IMPORTANT:
+   * This now comes from the GLOBAL
+   * task cycle RPC.
+   */
+  cycle_started_at: string;
 };
 
 type Submission = {
   id: string;
   task_id: string;
+  package_amount?: number;
+  title?: string;
+  reward_amount?: number;
   screenshot_url: string | null;
-  status: "pending" | "approved" | "rejected";
+  status:
+    | "pending"
+    | "approved"
+    | "rejected";
   admin_note: string | null;
   submitted_at: string;
   reviewed_at: string | null;
+  cycle_started_at: string;
 };
 
-function taka(amount: number | null | undefined) {
-  return `৳${Number(amount ?? 0).toLocaleString("en-BD")}`;
-}
-
-function formatDate(date: string | null | undefined) {
-  if (!date) return "";
-
-  const parsed = new Date(date);
-
-  if (Number.isNaN(parsed.getTime())) {
-    return "";
-  }
-
-  return parsed.toLocaleDateString("en-BD", {
-    day: "2-digit",
-    month: "short",
-    year: "numeric",
-  });
-}
-
-function formatRemaining(seconds: number) {
-  const safeSeconds = Math.max(0, Math.floor(seconds));
-
-  const hours = Math.floor(safeSeconds / 3600);
-  const minutes = Math.floor((safeSeconds % 3600) / 60);
-  const secs = safeSeconds % 60;
-
-  return `${String(hours).padStart(2, "0")}:${String(
-    minutes
-  ).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
-}
-
 export default function TasksPage() {
-  const [loading, setLoading] = useState(true);
-  const [loggedIn, setLoggedIn] = useState(false);
+  const router = useRouter();
 
-  const [tasks, setTasks] = useState<Task[]>([]);
-  const [submissions, setSubmissions] = useState<Submission[]>(
-    []
-  );
+  const [tasks, setTasks] =
+    useState<Task[]>([]);
+
+  const [submissions, setSubmissions] =
+    useState<Submission[]>([]);
+
+  const [loading, setLoading] =
+    useState(true);
+
+  const [refreshing, setRefreshing] =
+    useState(false);
 
   const [selectedTask, setSelectedTask] =
     useState<Task | null>(null);
 
-  const [screenshot, setScreenshot] = useState<File | null>(
-    null
-  );
+  const [showUploadModal, setShowUploadModal] =
+    useState(false);
 
-  const [uploading, setUploading] = useState(false);
+  const [selectedFile, setSelectedFile] =
+    useState<File | null>(null);
 
-  const [message, setMessage] = useState("");
-  const [error, setError] = useState("");
+  const [uploading, setUploading] =
+    useState(false);
+
+  const [message, setMessage] =
+    useState<string | null>(null);
+
+  const [errorMessage, setErrorMessage] =
+    useState<string | null>(null);
 
   /*
-   * =====================================================
+   * Prevent multiple cycle reloads
+   * at the exact same time.
+   */
+  const cycleRefreshLock =
+    useRef(false);
+
+  /*
+   * ============================================================
    * LOAD TASKS
-   * =====================================================
+   * ============================================================
    */
 
-  const loadTasks = useCallback(async () => {
-    try {
-      setLoading(true);
-      setError("");
-
-      const {
-        data: { user },
-        error: userError,
-      } = await supabase.auth.getUser();
-
-      if (userError || !user) {
-        setLoggedIn(false);
-        setTasks([]);
-        setSubmissions([]);
-        return;
-      }
-
-      setLoggedIn(true);
-
-      /*
-       * Load available package tasks.
-       */
-
-      const {
-        data: taskData,
-        error: taskError,
-      } = await supabase.rpc("get_my_tasks");
-
-      if (taskError) {
-        console.error(
-          "Task loading error:",
-          taskError
-        );
-
-        throw new Error(
-          taskError.message ||
-            "টাস্ক লোড করা যাচ্ছে না।"
-        );
-      }
-
-      /*
-       * Load user's package task submissions.
-       */
-
-      const {
-        data: submissionData,
-        error: submissionError,
-      } = await supabase.rpc(
-        "get_my_task_submissions"
-      );
-
-      if (submissionError) {
-        console.error(
-          "Submission history error:",
-          submissionError
-        );
-      }
-
-      const loadedSubmissions =
-        (submissionData ?? []) as Submission[];
-
-      const loadedTasks =
-        (taskData ?? []) as Task[];
-
-      /*
-       * ---------------------------------------------------
-       * IMPORTANT
-       *
-       * Merge submission history into task status.
-       *
-       * This prevents the UI from showing
-       * Start Task / Upload Proof again after submission.
-       * ---------------------------------------------------
-       */
-
-      const mergedTasks = loadedTasks.map((task) => {
-        const latestSubmission =
-          loadedSubmissions.find(
-            (submission) =>
-              submission.task_id === task.id
-          );
-
-        return {
-          ...task,
-          submission_status:
-            latestSubmission?.status ??
-            task.submission_status ??
-            null,
-        };
-      });
-
-      setTasks(mergedTasks);
-      setSubmissions(loadedSubmissions);
-    } catch (err) {
-      console.error(err);
-
-      setError(
-        err instanceof Error
-          ? err.message
-          : "টাস্ক লোড করা যাচ্ছে না।"
-      );
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  /*
-   * =====================================================
-   * AUTH + INITIAL LOAD
-   * =====================================================
-   */
-
-  useEffect(() => {
-    let mounted = true;
-
-    const initialize = async () => {
-      if (!mounted) return;
-
-      await loadTasks();
-    };
-
-    initialize();
-
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange(
-      (event) => {
-        if (!mounted) return;
-
-        if (
-          event === "SIGNED_IN" ||
-          event === "SIGNED_OUT" ||
-          event === "TOKEN_REFRESHED" ||
-          event === "USER_UPDATED"
-        ) {
-          loadTasks();
+  const loadTasks = useCallback(
+    async (showLoader = true) => {
+      try {
+        if (showLoader) {
+          setLoading(true);
         }
-      }
-    );
 
-    return () => {
-      mounted = false;
-      subscription.unsubscribe();
-    };
-  }, [loadTasks]);
+        setErrorMessage(null);
 
-  /*
-   * =====================================================
-   * COUNTDOWN
-   * =====================================================
-   */
-
-  useEffect(() => {
-    if (tasks.length === 0) return;
-
-    const interval = window.setInterval(() => {
-      const now = Date.now();
-
-      setTasks((currentTasks) =>
-        currentTasks
-          .map((task) => {
-            const expiresAt = new Date(
-              task.expires_at
-            ).getTime();
-
-            const remainingSeconds = Math.max(
-              0,
-              Math.floor(
-                (expiresAt - now) / 1000
-              )
-            );
-
-            return {
-              ...task,
-              remaining_seconds:
-                remainingSeconds,
-            };
-          })
-          .filter(
-            (task) =>
-              task.remaining_seconds > 0
-          )
-      );
-    }, 1000);
-
-    return () => {
-      window.clearInterval(interval);
-    };
-  }, [tasks.length]);
-
-  /*
-   * =====================================================
-   * GET SUBMISSION
-   * =====================================================
-   */
-
-  const getSubmission = (task: Task) => {
-    const historySubmission =
-      submissions.find(
-        (submission) =>
-          submission.task_id === task.id
-      );
-
-    if (historySubmission) {
-      return historySubmission;
-    }
-
-    /*
-     * Fallback to task.submission_status.
-     *
-     * This is important because get_my_tasks()
-     * already returns submission_status.
-     */
-
-    if (task.submission_status) {
-      return {
-        id: `task-status-${task.id}`,
-        task_id: task.id,
-        screenshot_url: null,
-        status: task.submission_status,
-        admin_note: null,
-        submitted_at: "",
-        reviewed_at: null,
-      } as Submission;
-    }
-
-    return null;
-  };
-
-  /*
-   * =====================================================
-   * START TASK
-   * =====================================================
-   */
-
-  const handleStartTask = (task: Task) => {
-    setMessage("");
-    setError("");
-
-    /*
-     * Safety:
-     * Submitted/approved/pending task cannot
-     * be started again.
-     */
-
-    const submission = getSubmission(task);
-
-    if (
-      submission?.status === "pending" ||
-      submission?.status === "approved"
-    ) {
-      setMessage(
-        "এই টাস্ক ইতিমধ্যে সম্পন্ন হয়েছে।"
-      );
-      return;
-    }
-
-    if (!loggedIn) {
-      window.location.href = "/register";
-      return;
-    }
-
-    if (!task.task_url) {
-      setError(
-        "এই টাস্কের লিংক পাওয়া যাচ্ছে না।"
-      );
-      return;
-    }
-
-    window.open(
-      task.task_url,
-      "_blank",
-      "noopener,noreferrer"
-    );
-  };
-
-  /*
-   * =====================================================
-   * OPEN SUBMISSION
-   * =====================================================
-   */
-
-  const openSubmission = (task: Task) => {
-    const submission = getSubmission(task);
-
-    /*
-     * Pending / approved task cannot open
-     * submission modal.
-     */
-
-    if (
-      submission?.status === "pending" ||
-      submission?.status === "approved"
-    ) {
-      setMessage(
-        "এই টাস্কের প্রুফ ইতিমধ্যে জমা হয়েছে।"
-      );
-      return;
-    }
-
-    setMessage("");
-    setError("");
-    setScreenshot(null);
-    setSelectedTask(task);
-  };
-
-  /*
-   * =====================================================
-   * CLOSE SUBMISSION
-   * =====================================================
-   */
-
-  const closeSubmission = () => {
-    if (uploading) return;
-
-    setSelectedTask(null);
-    setScreenshot(null);
-    setError("");
-  };
-
-  /*
-   * =====================================================
-   * SCREENSHOT CHANGE
-   * =====================================================
-   */
-
-  const handleScreenshotChange = (
-    event: ChangeEvent<HTMLInputElement>
-  ) => {
-    setMessage("");
-    setError("");
-
-    const file = event.target.files?.[0];
-
-    if (!file) {
-      setScreenshot(null);
-      return;
-    }
-
-    if (!file.type.startsWith("image/")) {
-      setError(
-        "শুধু ছবি ফাইল নির্বাচন করুন।"
-      );
-
-      event.target.value = "";
-      setScreenshot(null);
-      return;
-    }
-
-    if (file.size > 8 * 1024 * 1024) {
-      setError(
-        "স্ক্রিনশট ৮ MB-এর মধ্যে হতে হবে।"
-      );
-
-      event.target.value = "";
-      setScreenshot(null);
-      return;
-    }
-
-    setScreenshot(file);
-  };
-
-  /*
-   * =====================================================
-   * SUBMIT TASK
-   * =====================================================
-   */
-
-  const handleSubmit = async () => {
-    if (!selectedTask) return;
-
-    if (!loggedIn) {
-      window.location.href = "/register";
-      return;
-    }
-
-    /*
-     * Extra frontend protection:
-     * already submitted task cannot submit again.
-     */
-
-    const currentSubmission =
-      getSubmission(selectedTask);
-
-    if (
-      currentSubmission?.status ===
-        "pending" ||
-      currentSubmission?.status === "approved"
-    ) {
-      setSelectedTask(null);
-      setScreenshot(null);
-
-      setMessage(
-        "এই টাস্কের প্রুফ ইতিমধ্যে জমা হয়েছে।"
-      );
-
-      return;
-    }
-
-    if (
-      selectedTask.screenshot_required &&
-      !screenshot
-    ) {
-      setError(
-        "সাবমিট করার আগে স্ক্রিনশট আপলোড করুন।"
-      );
-      return;
-    }
-
-    try {
-      setUploading(true);
-      setError("");
-      setMessage("");
-
-      const {
-        data: { user },
-        error: userError,
-      } = await supabase.auth.getUser();
-
-      if (userError || !user) {
-        throw new Error(
-          "আপনার সেশন শেষ হয়ে গেছে। আবার Login করুন।"
-        );
-      }
-
-      let screenshotUrl = "";
-
-      /*
-       * =================================================
-       * UPLOAD SCREENSHOT
-       * =================================================
-       */
-
-      if (screenshot) {
-        const extension =
-          screenshot.name
-            .split(".")
-            .pop()
-            ?.toLowerCase() || "jpg";
-
-        const fileName =
-          `${user.id}/${selectedTask.id}-${Date.now()}.${extension}`;
+        /*
+         * ======================================================
+         * AUTH USER
+         * ======================================================
+         */
 
         const {
-          error: uploadError,
-        } = await supabase.storage
-          .from("task-screenshots")
-          .upload(
-            fileName,
-            screenshot,
-            {
-              cacheControl: "3600",
-              upsert: false,
-              contentType:
-                screenshot.type,
-            }
-          );
+          data: {
+            user,
+          },
+          error: userError,
+        } =
+          await supabase.auth.getUser();
 
-        if (uploadError) {
+        if (userError) {
           console.error(
-            "Screenshot upload error:",
-            uploadError
-          );
-
-          throw new Error(
-            "স্ক্রিনশট আপলোড করা যায়নি। আবার চেষ্টা করুন।"
+            "TASK USER ERROR:",
+            userError
           );
         }
 
-        const { data } =
-          supabase.storage
-            .from("task-screenshots")
-            .getPublicUrl(
-              fileName
-            );
-
-        screenshotUrl =
-          data.publicUrl;
-      }
-
-      /*
-       * =================================================
-       * SUBMIT PACKAGE TASK
-       * =================================================
-       */
-
-      const {
-        data: submissionId,
-        error: submitError,
-      } = await supabase.rpc(
-        "submit_package_task",
-        {
-          p_task_id:
-            selectedTask.id,
-
-          p_screenshot_url:
-            screenshotUrl,
+        if (!user) {
+          setTasks([]);
+          setSubmissions([]);
+          setLoading(false);
+          return;
         }
-      );
 
-      if (submitError) {
-        console.error(
-          "Task submission error:",
-          submitError
-        );
+        /*
+         * ======================================================
+         * GET CURRENT GLOBAL-CYCLE TASKS
+         * ======================================================
+         */
 
-        throw new Error(
-          submitError.message ||
-            "টাস্ক সাবমিট করা যায়নি।"
-        );
-      }
-
-      /*
-       * =================================================
-       * IMMEDIATE LOCAL UI UPDATE
-       *
-       * This is the important fix.
-       *
-       * The moment RPC succeeds, task becomes
-       * pending locally.
-       * =================================================
-       */
-
-      const nowIso =
-        new Date().toISOString();
-
-      const newSubmission: Submission = {
-        id:
-          String(
-            submissionId ??
-              `local-${Date.now()}`
-          ),
-
-        task_id:
-          selectedTask.id,
-
-        screenshot_url:
-          screenshotUrl || null,
-
-        status: "pending",
-
-        admin_note: null,
-
-        submitted_at:
-          nowIso,
-
-        reviewed_at: null,
-      };
-
-      /*
-       * Add submission history immediately.
-       */
-
-      setSubmissions((current) => {
-        const filtered =
-          current.filter(
-            (item) =>
-              item.task_id !==
-              selectedTask.id
+        const {
+          data: loadedTasks,
+          error: tasksError,
+        } =
+          await supabase.rpc(
+            "get_my_tasks"
           );
 
-        return [
-          newSubmission,
-          ...filtered,
-        ];
-      });
+        if (tasksError) {
+          console.error(
+            "GET MY TASKS ERROR:",
+            tasksError
+          );
 
-      /*
-       * Update task status immediately.
-       */
+          throw tasksError;
+        }
 
-      setTasks((currentTasks) =>
-        currentTasks.map(
-          (task) =>
-            task.id ===
-            selectedTask.id
-              ? {
-                  ...task,
-                  submission_status:
-                    "pending",
-                }
-              : task
-        )
-      );
+        /*
+         * ======================================================
+         * GET COMPLETE SUBMISSION HISTORY
+         * ======================================================
+         */
 
-      /*
-       * Close modal.
-       */
+        const {
+          data:
+            loadedSubmissions,
+          error:
+            submissionsError,
+        } =
+          await supabase.rpc(
+            "get_my_task_submissions"
+          );
 
-      setScreenshot(null);
-      setSelectedTask(null);
+        if (submissionsError) {
+          console.error(
+            "GET MY TASK SUBMISSIONS ERROR:",
+            submissionsError
+          );
 
-      /*
-       * Show success message.
-       */
+          throw submissionsError;
+        }
 
-      setMessage(
-        "টাস্ক সাবমিট হয়েছে। এখন অ্যাডমিন রিভিউ করবে।"
-      );
+        /*
+         * ======================================================
+         * NORMALIZE TASKS
+         * ======================================================
+         */
 
-      /*
-       * Reload from database as a final sync.
-       *
-       * Local state is already updated, so the UI
-       * will not temporarily show old buttons.
-       */
+        const normalizedTasks: Task[] =
+          (loadedTasks ?? []).map(
+            (task: any) => {
+              const cycleStartedAt =
+                task.cycle_started_at ??
+                new Date().toISOString();
 
-      const {
-        data: refreshedTasks,
-        error: refreshedTaskError,
-      } = await supabase.rpc(
-        "get_my_tasks"
-      );
-
-      const {
-        data: refreshedSubmissions,
-        error:
-          refreshedSubmissionError,
-      } = await supabase.rpc(
-        "get_my_task_submissions"
-      );
-
-      if (!refreshedTaskError) {
-        const freshTasks =
-          (refreshedTasks ??
-            []) as Task[];
-
-        const freshSubmissions =
-          refreshedSubmissionError
-            ? [newSubmission]
-            : ((refreshedSubmissions ??
-                []) as Submission[]);
-
-        const finalTasks =
-          freshTasks.map(
-            (task) => {
-              const latest =
-                freshSubmissions.find(
-                  (submission) =>
-                    submission.task_id ===
-                    task.id
-                );
+              const expiresAt =
+                task.expires_at ??
+                new Date(
+                  new Date(
+                    cycleStartedAt
+                  ).getTime() +
+                    24 *
+                      60 *
+                      60 *
+                      1000
+                ).toISOString();
 
               return {
-                ...task,
-                submission_status:
-                  latest?.status ??
-                  task.submission_status ??
+                id: task.id,
+
+                package_amount:
+                  Number(
+                    task.package_amount ??
+                      0
+                  ),
+
+                title:
+                  task.title ??
+                  "কাজ",
+
+                description:
+                  task.description ??
                   null,
+
+                task_url:
+                  task.task_url ??
+                  "",
+
+                reward_amount:
+                  Number(
+                    task.reward_amount ??
+                      0
+                  ),
+
+                screenshot_required:
+                  Boolean(
+                    task.screenshot_required
+                  ),
+
+                is_active:
+                  Boolean(
+                    task.is_active
+                  ),
+
+                created_at:
+                  task.created_at,
+
+                expires_at:
+                  expiresAt,
+
+                remaining_seconds:
+                  Math.max(
+                    0,
+                    Number(
+                      task.remaining_seconds ??
+                        0
+                    )
+                  ),
+
+                submission_status:
+                  task.submission_status ===
+                    "pending" ||
+                  task.submission_status ===
+                    "approved" ||
+                  task.submission_status ===
+                    "rejected"
+                    ? task.submission_status
+                    : null,
+
+                /*
+                 * GLOBAL CYCLE
+                 */
+                cycle_started_at:
+                  cycleStartedAt,
               };
             }
           );
 
-        setTasks(finalTasks);
+        /*
+         * ======================================================
+         * NORMALIZE SUBMISSIONS
+         * ======================================================
+         */
+
+        const normalizedSubmissions: Submission[] =
+          (
+            loadedSubmissions ??
+            []
+          ).map(
+            (submission: any) => ({
+              id:
+                submission.id,
+
+              task_id:
+                submission.task_id,
+
+              package_amount:
+                submission.package_amount !=
+                null
+                  ? Number(
+                      submission.package_amount
+                    )
+                  : undefined,
+
+              title:
+                submission.title ??
+                undefined,
+
+              reward_amount:
+                submission.reward_amount !=
+                null
+                  ? Number(
+                      submission.reward_amount
+                    )
+                  : undefined,
+
+              screenshot_url:
+                submission.screenshot_url ??
+                null,
+
+              status:
+                submission.status,
+
+              admin_note:
+                submission.admin_note ??
+                null,
+
+              submitted_at:
+                submission.submitted_at,
+
+              reviewed_at:
+                submission.reviewed_at ??
+                null,
+
+              cycle_started_at:
+                submission.cycle_started_at,
+            })
+          );
+
+        /*
+         * ======================================================
+         * SAVE STATE
+         * ======================================================
+         */
+
+        setTasks(
+          normalizedTasks
+        );
+
         setSubmissions(
-          freshSubmissions
+          normalizedSubmissions
+        );
+      } catch (error: any) {
+        console.error(
+          "LOAD TASKS ERROR:",
+          error
+        );
+
+        setErrorMessage(
+          error?.message ||
+            "কাজ লোড করতে সমস্যা হয়েছে।"
+        );
+      } finally {
+        setLoading(false);
+      }
+    },
+    []
+  );
+
+  /*
+   * ============================================================
+   * INITIAL LOAD
+   * ============================================================
+   */
+
+  useEffect(() => {
+    loadTasks(true);
+  }, [loadTasks]);
+
+  /*
+   * ============================================================
+   * GET CURRENT GLOBAL CYCLE START
+   *
+   * IMPORTANT:
+   *
+   * NEVER calculate this from task.created_at.
+   *
+   * The RPC already gives us the synchronized
+   * global cycle_started_at.
+   * ============================================================
+   */
+
+  const getCurrentCycleStart =
+    useCallback(
+      (task: Task) => {
+        if (
+          !task.cycle_started_at
+        ) {
+          return null;
+        }
+
+        return new Date(
+          task.cycle_started_at
+        ).getTime();
+      },
+      []
+    );
+
+  /*
+   * ============================================================
+   * FIND SUBMISSION FOR CURRENT GLOBAL CYCLE
+   * ============================================================
+   */
+
+  const getSubmission =
+    useCallback(
+      (task: Task) => {
+        const currentCycleStart =
+          getCurrentCycleStart(
+            task
+          );
+
+        if (
+          currentCycleStart ===
+          null
+        ) {
+          return null;
+        }
+
+        /*
+         * Prefer actual submission history.
+         */
+
+        const currentCycleSubmission =
+          submissions.find(
+            (submission) => {
+              if (
+                submission.task_id !==
+                task.id
+              ) {
+                return false;
+              }
+
+              if (
+                !submission.cycle_started_at
+              ) {
+                return false;
+              }
+
+              const submissionCycle =
+                new Date(
+                  submission.cycle_started_at
+                ).getTime();
+
+              /*
+               * Exact global cycle match.
+               */
+              return (
+                submissionCycle ===
+                currentCycleStart
+              );
+            }
+          );
+
+        if (
+          currentCycleSubmission
+        ) {
+          return currentCycleSubmission;
+        }
+
+        /*
+         * ======================================================
+         * RPC STATUS FALLBACK
+         *
+         * This is important immediately after submission
+         * before the complete history finishes updating.
+         * ======================================================
+         */
+
+        if (
+          task.submission_status ===
+            "pending" ||
+          task.submission_status ===
+            "approved" ||
+          task.submission_status ===
+            "rejected"
+        ) {
+          return {
+            id:
+              `current-${task.id}`,
+
+            task_id:
+              task.id,
+
+            screenshot_url:
+              null,
+
+            status:
+              task.submission_status,
+
+            admin_note:
+              null,
+
+            submitted_at:
+              "",
+
+            reviewed_at:
+              null,
+
+            cycle_started_at:
+              task.cycle_started_at,
+          } as Submission;
+        }
+
+        return null;
+      },
+      [
+        getCurrentCycleStart,
+        submissions,
+      ]
+    );
+
+  /*
+   * ============================================================
+   * LIVE COUNTDOWN
+   *
+   * Countdown is based ONLY on expires_at returned by RPC.
+   *
+   * Submission time does NOT affect it.
+   * ============================================================
+   */
+
+  useEffect(() => {
+    if (!tasks.length) {
+      return;
+    }
+
+    const timer =
+      setInterval(() => {
+        const now =
+          Date.now();
+
+        let cycleEnded = false;
+
+        setTasks(
+          (currentTasks) =>
+            currentTasks.map(
+              (task) => {
+                const expiresAt =
+                  new Date(
+                    task.expires_at
+                  ).getTime();
+
+                const remainingSeconds =
+                  Math.max(
+                    0,
+                    Math.floor(
+                      (
+                        expiresAt -
+                        now
+                      ) / 1000
+                    )
+                  );
+
+                if (
+                  remainingSeconds <=
+                  0
+                ) {
+                  cycleEnded = true;
+                }
+
+                return {
+                  ...task,
+
+                  remaining_seconds:
+                    remainingSeconds,
+                };
+              }
+            )
+        );
+
+        /*
+         * When the global cycle ends,
+         * reload DB state.
+         *
+         * This gives the same task a new
+         * global cycle.
+         */
+
+        if (
+          cycleEnded &&
+          !cycleRefreshLock.current
+        ) {
+          cycleRefreshLock.current =
+            true;
+
+          loadTasks(false).finally(
+            () => {
+              setTimeout(() => {
+                cycleRefreshLock.current =
+                  false;
+              }, 1500);
+            }
+          );
+        }
+      }, 1000);
+
+    return () =>
+      clearInterval(timer);
+  }, [
+    tasks.length,
+    loadTasks,
+  ]);
+
+  /*
+   * ============================================================
+   * ADMIN GLOBAL REFRESH DETECTION
+   *
+   * If Admin presses "সময় Refresh" while the user is already
+   * sitting on this page, the User panel should update too.
+   *
+   * We periodically call get_my_tasks().
+   *
+   * 10 seconds is used so the user panel catches an Admin
+   * refresh quickly without continuously hammering Supabase.
+   * ============================================================
+   */
+
+  useEffect(() => {
+    if (loading) {
+      return;
+    }
+
+    const interval =
+      setInterval(() => {
+        if (
+          cycleRefreshLock.current
+        ) {
+          return;
+        }
+
+        cycleRefreshLock.current =
+          true;
+
+        loadTasks(false).finally(
+          () => {
+            setTimeout(() => {
+              cycleRefreshLock.current =
+                false;
+            }, 500);
+          }
+        );
+      }, 10000);
+
+    return () =>
+      clearInterval(
+        interval
+      );
+  }, [
+    loading,
+    loadTasks,
+  ]);
+
+  /*
+   * ============================================================
+   * MANUAL REFRESH
+   * ============================================================
+   */
+
+  const handleRefresh =
+    async () => {
+      try {
+        setRefreshing(true);
+        setMessage(null);
+        setErrorMessage(null);
+
+        await loadTasks(false);
+      } catch {
+        // loadTasks already handles error state.
+      } finally {
+        setRefreshing(false);
+      }
+    };
+
+  /*
+   * ============================================================
+   * FORMAT MONEY
+   * ============================================================
+   */
+
+  const formatMoney =
+    (amount: number) => {
+      return new Intl.NumberFormat(
+        "en-BD"
+      ).format(
+        Number(
+          amount || 0
+        )
+      );
+    };
+
+  /*
+   * ============================================================
+   * FORMAT COUNTDOWN
+   * ============================================================
+   */
+
+  const formatCountdown =
+    (seconds: number) => {
+      const safeSeconds =
+        Math.max(
+          0,
+          Math.floor(
+            seconds
+          )
+        );
+
+      const hours =
+        Math.floor(
+          safeSeconds /
+            3600
+        );
+
+      const minutes =
+        Math.floor(
+          (safeSeconds %
+            3600) /
+            60
+        );
+
+      const secs =
+        safeSeconds % 60;
+
+      return [
+        String(
+          hours
+        ).padStart(
+          2,
+          "0"
+        ),
+
+        String(
+          minutes
+        ).padStart(
+          2,
+          "0"
+        ),
+
+        String(
+          secs
+        ).padStart(
+          2,
+          "0"
+        ),
+      ].join(":");
+    };
+
+  /*
+   * ============================================================
+   * START TASK
+   * ============================================================
+   */
+
+  const handleStartTask =
+    async (
+      task: Task
+    ) => {
+      setMessage(null);
+      setErrorMessage(null);
+
+      const submission =
+        getSubmission(
+          task
+        );
+
+      /*
+       * Any submission in the current
+       * global cycle blocks another submission.
+       */
+
+      if (submission) {
+        setMessage(
+          "এই ২৪ ঘণ্টার সাইকেলে এই কাজটি ইতিমধ্যে জমা দেওয়া হয়েছে। পরবর্তী সাইকেলে আবার জমা দিতে পারবেন।"
+        );
+
+        return;
+      }
+
+      if (!task.task_url) {
+        setMessage(
+          "এই কাজের কোনো লিংক পাওয়া যায়নি।"
+        );
+
+        return;
+      }
+
+      window.open(
+        task.task_url,
+        "_blank",
+        "noopener,noreferrer"
+      );
+    };
+
+  /*
+   * ============================================================
+   * OPEN SUBMISSION MODAL
+   * ============================================================
+   */
+
+  const openSubmission =
+    (
+      task: Task
+    ) => {
+      setMessage(null);
+      setErrorMessage(null);
+
+      const submission =
+        getSubmission(
+          task
+        );
+
+      /*
+       * Pending / Approved / Rejected
+       * সব current cycle-এ block করবে।
+       */
+
+      if (submission) {
+        setMessage(
+          "এই ২৪ ঘণ্টার সাইকেলে এই কাজটি ইতিমধ্যে জমা দেওয়া হয়েছে। পরবর্তী সাইকেলে আবার জমা দিতে পারবেন।"
+        );
+
+        return;
+      }
+
+      setSelectedTask(
+        task
+      );
+
+      setSelectedFile(
+        null
+      );
+
+      setShowUploadModal(
+        true
+      );
+    };
+
+  /*
+   * ============================================================
+   * CLOSE MODAL
+   * ============================================================
+   */
+
+  const closeUploadModal =
+    () => {
+      if (uploading) {
+        return;
+      }
+
+      setShowUploadModal(
+        false
+      );
+
+      setSelectedTask(
+        null
+      );
+
+      setSelectedFile(
+        null
+      );
+    };
+
+  /*
+   * ============================================================
+   * FILE CHANGE
+   * ============================================================
+   */
+
+  const handleFileChange =
+    (
+      event: React.ChangeEvent<HTMLInputElement>
+    ) => {
+      const file =
+        event.target.files?.[0] ??
+        null;
+
+      setSelectedFile(
+        file
+      );
+
+      setErrorMessage(
+        null
+      );
+    };
+
+  /*
+   * ============================================================
+   * SUBMIT TASK
+   * ============================================================
+   */
+
+  const handleSubmit =
+    async () => {
+      if (!selectedTask) {
+        return;
+      }
+
+      setMessage(null);
+      setErrorMessage(null);
+
+      /*
+       * ======================================================
+       * CLIENT-SIDE CURRENT GLOBAL CYCLE CHECK
+       * ======================================================
+       */
+
+      const currentSubmission =
+        getSubmission(
+          selectedTask
+        );
+
+      if (currentSubmission) {
+        setErrorMessage(
+          "এই ২৪ ঘণ্টার সাইকেলে এই কাজটি ইতিমধ্যে জমা দেওয়া হয়েছে।"
+        );
+
+        return;
+      }
+
+      /*
+       * ======================================================
+       * SCREENSHOT REQUIRED
+       * ======================================================
+       */
+
+      if (
+        selectedTask.screenshot_required &&
+        !selectedFile
+      ) {
+        setErrorMessage(
+          "এই কাজের জন্য Screenshot প্রয়োজন।"
+        );
+
+        return;
+      }
+
+      try {
+        setUploading(
+          true
+        );
+
+        /*
+         * ====================================================
+         * AUTH
+         * ====================================================
+         */
+
+        const {
+          data: {
+            user,
+          },
+          error:
+            userError,
+        } =
+          await supabase.auth.getUser();
+
+        if (
+          userError ||
+          !user
+        ) {
+          router.push(
+            "/login"
+          );
+
+          return;
+        }
+
+        let screenshotUrl:
+          | string
+          | null = null;
+
+        /*
+         * ====================================================
+         * UPLOAD SCREENSHOT
+         * ====================================================
+         */
+
+        if (selectedFile) {
+          const extension =
+            selectedFile.name
+              .split(".")
+              .pop()
+              ?.toLowerCase() ||
+            "jpg";
+
+          const fileName =
+            `${user.id}/${selectedTask.id}/${Date.now()}.${extension}`;
+
+          const {
+            error:
+              uploadError,
+          } =
+            await supabase.storage
+              .from(
+                "task-screenshots"
+              )
+              .upload(
+                fileName,
+                selectedFile,
+                {
+                  cacheControl:
+                    "3600",
+
+                  upsert:
+                    false,
+                }
+              );
+
+          if (uploadError) {
+            console.error(
+              "SCREENSHOT UPLOAD ERROR:",
+              uploadError
+            );
+
+            throw uploadError;
+          }
+
+          const {
+            data:
+              publicUrlData,
+          } =
+            supabase.storage
+              .from(
+                "task-screenshots"
+              )
+              .getPublicUrl(
+                fileName
+              );
+
+          screenshotUrl =
+            publicUrlData
+              ?.publicUrl ??
+            null;
+        }
+
+        /*
+         * ====================================================
+         * DATABASE SUBMISSION
+         *
+         * The RPC itself calculates the current global cycle.
+         *
+         * Client does NOT send cycle_started_at.
+         * ====================================================
+         */
+
+        const {
+          data:
+            submissionId,
+          error:
+            submitError,
+        } =
+          await supabase.rpc(
+            "submit_package_task",
+            {
+              p_task_id:
+                selectedTask.id,
+
+              p_screenshot_url:
+                screenshotUrl,
+            }
+          );
+
+        if (submitError) {
+          console.error(
+            "SUBMIT TASK ERROR:",
+            submitError
+          );
+
+          throw submitError;
+        }
+
+        if (!submissionId) {
+          throw new Error(
+            "Submission ID পাওয়া যায়নি।"
+          );
+        }
+
+        /*
+         * ====================================================
+         * CLOSE MODAL
+         * ====================================================
+         */
+
+        setShowUploadModal(
+          false
+        );
+
+        setSelectedTask(
+          null
+        );
+
+        setSelectedFile(
+          null
+        );
+
+        setMessage(
+          "কাজ সফলভাবে জমা হয়েছে। Admin যাচাই করার পর Reward যোগ হবে।"
+        );
+
+        /*
+         * ====================================================
+         * RELOAD DATABASE STATE
+         * ====================================================
+         */
+
+        await loadTasks(
+          false
+        );
+      } catch (error: any) {
+        console.error(
+          "HANDLE SUBMIT ERROR:",
+          error
+        );
+
+        const errorText =
+          error?.message ||
+          "কাজ জমা দিতে সমস্যা হয়েছে।";
+
+        /*
+         * ====================================================
+         * FRIENDLY ERROR
+         * ====================================================
+         */
+
+        if (
+          errorText.includes(
+            "already submitted"
+          )
+        ) {
+          setErrorMessage(
+            "এই ২৪ ঘণ্টার সাইকেলে এই কাজটি ইতিমধ্যে জমা দেওয়া হয়েছে।"
+          );
+        } else if (
+          errorText.includes(
+            "Screenshot is required"
+          )
+        ) {
+          setErrorMessage(
+            "এই কাজের জন্য Screenshot প্রয়োজন।"
+          );
+        } else if (
+          errorText.includes(
+            "not eligible"
+          )
+        ) {
+          setErrorMessage(
+            "এই কাজের জন্য আপনার কোনো Active Package নেই।"
+          );
+        } else {
+          setErrorMessage(
+            errorText
+          );
+        }
+      } finally {
+        setUploading(
+          false
         );
       }
-    } catch (err) {
-      console.error(err);
-
-      setError(
-        err instanceof Error
-          ? err.message
-          : "টাস্ক সাবমিট করা যায়নি।"
-      );
-    } finally {
-      setUploading(false);
-    }
-  };
+    };
 
   /*
-   * =====================================================
-   * LOADING
-   * =====================================================
+   * ============================================================
+   * TASK COUNTS
+   * ============================================================
    */
 
-  if (loading) {
-    return (
-      <main className="min-h-screen bg-[#f7faf7] pb-28">
-        <Header />
+  const pendingCount =
+    useMemo(() => {
+      return tasks.filter(
+        (task) =>
+          getSubmission(
+            task
+          )?.status ===
+          "pending"
+      ).length;
+    }, [
+      tasks,
+      getSubmission,
+    ]);
 
-        <div className="mx-auto max-w-5xl px-4 py-6">
-          <div className="h-3 w-28 animate-pulse rounded bg-gray-200" />
-
-          <div className="mt-3 h-8 w-52 animate-pulse rounded-lg bg-gray-200" />
-
-          <div className="mt-3 h-4 w-72 animate-pulse rounded bg-gray-200" />
-
-          <div className="mt-6 grid gap-4 md:grid-cols-2">
-            {[1, 2, 3, 4].map(
-              (item) => (
-                <div
-                  key={item}
-                  className="h-64 animate-pulse rounded-3xl bg-white shadow-sm"
-                />
-              )
-            )}
-          </div>
-        </div>
-
-        <BottomNav />
-      </main>
-    );
-  }
+  const availableCount =
+    useMemo(() => {
+      return tasks.filter(
+        (task) =>
+          !getSubmission(
+            task
+          )
+      ).length;
+    }, [
+      tasks,
+      getSubmission,
+    ]);
 
   /*
-   * =====================================================
-   * LOGGED OUT
-   * =====================================================
-   */
-
-  if (!loggedIn) {
-    return (
-      <main className="min-h-screen bg-[#f7faf7] pb-28">
-        <Header />
-
-        <div className="mx-auto max-w-md px-4 py-10">
-          <section className="rounded-3xl border border-gray-100 bg-white p-7 text-center shadow-sm">
-            <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl bg-green-50">
-              <span className="text-2xl">
-                ✓
-              </span>
-            </div>
-
-            <h1 className="mt-5 text-2xl font-black text-gray-900">
-              Login Required
-            </h1>
-
-            <p className="mt-2 text-sm leading-6 text-gray-500">
-              Login করুন অথবা নতুন
-              অ্যাকাউন্ট তৈরি করুন এবং
-              আপনার প্যাকেজের টাস্ক দেখুন।
-            </p>
-
-            <Link
-              href="/login"
-              className="mt-6 flex h-12 items-center justify-center rounded-2xl bg-[#7ed957] text-sm font-black text-white shadow-lg shadow-green-100"
-            >
-              Login
-            </Link>
-
-            <Link
-              href="/register"
-              className="mt-3 flex h-12 items-center justify-center rounded-2xl border border-gray-200 text-sm font-bold text-gray-700"
-            >
-              Registration
-            </Link>
-          </section>
-        </div>
-
-        <BottomNav />
-      </main>
-    );
-  }
-
-  /*
-   * =====================================================
-   * LOGGED IN
-   * =====================================================
+   * ============================================================
+   * RENDER
+   * ============================================================
    */
 
   return (
-    <main className="min-h-screen bg-[#f7faf7] pb-28">
+    <div className="min-h-screen bg-slate-950 text-white pb-24">
       <Header />
 
-      <div className="mx-auto max-w-5xl px-4 py-6">
-
+      <main className="mx-auto w-full max-w-3xl px-4 pt-5">
+        {/* ================================================== */}
         {/* HEADER */}
+        {/* ================================================== */}
 
-        <div>
-          <p className="text-xs font-black uppercase tracking-[0.14em] text-[#4f9d32]">
-            কাজ ও আয়
-          </p>
+        <div className="mb-5 flex items-center justify-between gap-3">
+          <div>
+            <h1 className="text-2xl font-bold">
+              কাজ
+            </h1>
 
-          <h1 className="mt-1 text-2xl font-black tracking-tight text-gray-900">
-            আপনার টাস্ক
-          </h1>
+            <p className="mt-1 text-sm text-slate-400">
+              আপনার Active Package অনুযায়ী কাজগুলো এখানে দেখানো হবে।
+            </p>
+          </div>
 
-          <p className="mt-2 max-w-xl text-sm leading-6 text-gray-500">
-            আপনার সক্রিয় প্যাকেজের জন্য
-            নির্ধারিত টাস্ক সম্পন্ন করে
-            প্রুফ জমা দিন।
-          </p>
+          <button
+            type="button"
+            onClick={
+              handleRefresh
+            }
+            disabled={
+              refreshing
+            }
+            className="rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-sm font-semibold text-slate-200 transition hover:bg-slate-800 disabled:opacity-50"
+          >
+            {refreshing
+              ? "লোড হচ্ছে..."
+              : "রিফ্রেশ"}
+          </button>
         </div>
 
+        {/* ================================================== */}
         {/* MESSAGE */}
+        {/* ================================================== */}
 
         {message && (
-          <div className="mt-5 rounded-2xl border border-green-100 bg-green-50 p-4 text-sm font-semibold leading-6 text-green-700">
+          <div className="mb-4 rounded-2xl border border-emerald-500/30 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-300">
             {message}
           </div>
         )}
 
-        {/* ERROR */}
-
-        {error && (
-          <div className="mt-5 rounded-2xl border border-red-100 bg-red-50 p-4 text-sm font-semibold leading-6 text-red-600">
-            {error}
+        {errorMessage && (
+          <div className="mb-4 rounded-2xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-300">
+            {errorMessage}
           </div>
         )}
 
-        {/* NO TASK */}
+        {/* ================================================== */}
+        {/* SUMMARY */}
+        {/* ================================================== */}
 
-        {tasks.length === 0 ? (
-          <section className="mt-6 rounded-3xl border border-gray-100 bg-white p-8 text-center shadow-sm">
-            <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl bg-gray-50 text-2xl">
-              📋
+        {!loading &&
+          tasks.length > 0 && (
+            <div className="mb-5 grid grid-cols-2 gap-3">
+              <div className="rounded-2xl border border-slate-800 bg-slate-900/80 p-4">
+                <p className="text-xs text-slate-400">
+                  মোট কাজ
+                </p>
+
+                <p className="mt-1 text-2xl font-bold">
+                  {tasks.length}
+                </p>
+              </div>
+
+              <div className="rounded-2xl border border-slate-800 bg-slate-900/80 p-4">
+                <p className="text-xs text-slate-400">
+                  জমা দেওয়া হয়নি
+                </p>
+
+                <p className="mt-1 text-2xl font-bold text-emerald-400">
+                  {availableCount}
+                </p>
+              </div>
             </div>
+          )}
 
-            <h2 className="mt-4 text-lg font-black text-gray-900">
-              কোনো টাস্ক নেই
-            </h2>
+        {/* ================================================== */}
+        {/* LOADING */}
+        {/* ================================================== */}
 
-            <p className="mt-2 text-sm leading-6 text-gray-500">
-              বর্তমানে আপনার প্যাকেজের জন্য
-              কোনো সক্রিয় টাস্ক নেই।
-              নতুন টাস্ক পরে যোগ হতে পারে।
-            </p>
-
-            <Link
-              href="/packages"
-              className="mt-5 inline-flex h-11 items-center justify-center rounded-2xl border border-green-200 bg-green-50 px-5 text-sm font-black text-[#4f9d32]"
-            >
-              প্যাকেজ দেখুন
-            </Link>
-          </section>
-        ) : (
-          <section className="mt-6 grid gap-4 md:grid-cols-2">
-            {tasks.map((task) => {
-              const submission =
-                getSubmission(task);
-
-              const isPending =
-                submission?.status ===
-                "pending";
-
-              const isApproved =
-                submission?.status ===
-                "approved";
-
-              const isRejected =
-                submission?.status ===
-                "rejected";
-
-              const isCompleted =
-                isPending ||
-                isApproved;
-
-              return (
-                <article
-                  key={task.id}
-                  className="overflow-hidden rounded-3xl border border-gray-100 bg-white shadow-[0_8px_30px_rgba(0,0,0,0.05)]"
+        {loading && (
+          <div className="space-y-4">
+            {[1, 2, 3].map(
+              (item) => (
+                <div
+                  key={item}
+                  className="animate-pulse rounded-3xl border border-slate-800 bg-slate-900 p-5"
                 >
-                  <div className="p-5">
+                  <div className="h-5 w-32 rounded bg-slate-800" />
 
-                    {/* TASK HEADER */}
+                  <div className="mt-4 h-7 w-3/4 rounded bg-slate-800" />
 
-                    <div className="flex items-start justify-between gap-4">
-                      <div className="min-w-0">
-                        <span className="inline-flex rounded-full bg-green-50 px-3 py-1 text-[10px] font-black uppercase tracking-wider text-[#4f9d32]">
-                          প্যাকেজ{" "}
-                          {taka(
-                            task.package_amount
-                          )}
-                        </span>
+                  <div className="mt-3 h-4 w-full rounded bg-slate-800" />
 
-                        <h2 className="mt-3 text-lg font-black leading-6 text-gray-900">
-                          {task.title}
-                        </h2>
-                      </div>
+                  <div className="mt-2 h-4 w-2/3 rounded bg-slate-800" />
 
-                      <div className="shrink-0 rounded-2xl bg-[#eef9e9] px-3 py-2 text-right">
-                        <p className="text-[9px] font-black uppercase tracking-wider text-gray-400">
-                          পুরস্কার
-                        </p>
-
-                        <p className="mt-0.5 text-lg font-black text-[#4f9d32]">
-                          {taka(
-                            task.reward_amount
-                          )}
-                        </p>
-                      </div>
-                    </div>
-
-                    {/* DESCRIPTION */}
-
-                    {task.description && (
-                      <p className="mt-4 text-sm leading-6 text-gray-500">
-                        {task.description}
-                      </p>
-                    )}
-
-                    {/* EXPIRY */}
-
-                    <div className="mt-5 rounded-2xl border border-orange-100 bg-orange-50 p-4">
-                      <div className="flex items-center justify-between gap-3">
-                        <div>
-                          <p className="text-[10px] font-black uppercase tracking-wider text-orange-500">
-                            সময় বাকি
-                          </p>
-
-                          <p className="mt-1 font-mono text-lg font-black tracking-wider text-orange-700">
-                            {formatRemaining(
-                              task.remaining_seconds
-                            )}
-                          </p>
-                        </div>
-
-                        <div className="text-right">
-                          <p className="text-[10px] font-bold text-orange-400">
-                            তৈরি
-                          </p>
-
-                          <p className="mt-1 text-xs font-bold text-orange-700">
-                            {formatDate(
-                              task.created_at
-                            )}
-                          </p>
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* TASK LINK */}
-
-                    <div className="mt-4 rounded-2xl bg-gray-50 p-4">
-                      <div className="flex items-center gap-3">
-                        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-white shadow-sm">
-                          🔗
-                        </div>
-
-                        <div className="min-w-0">
-                          <p className="text-xs font-black text-gray-800">
-                            টাস্ক লিংক
-                          </p>
-
-                          <p className="mt-0.5 text-[11px] text-gray-400">
-                            লিংকে গিয়ে প্রয়োজনীয়
-                            কাজ সম্পন্ন করুন।
-                          </p>
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* SUBMISSION STATUS */}
-
-                    {submission && (
-                      <div
-                        className={`mt-4 rounded-2xl border p-4 ${
-                          isApproved
-                            ? "border-green-100 bg-green-50"
-                            : isRejected
-                              ? "border-red-100 bg-red-50"
-                              : "border-yellow-100 bg-yellow-50"
-                        }`}
-                      >
-                        <div className="flex items-center justify-between gap-3">
-                          <div>
-                            <p
-                              className={`text-xs font-black ${
-                                isApproved
-                                  ? "text-green-700"
-                                  : isRejected
-                                    ? "text-red-700"
-                                    : "text-yellow-700"
-                              }`}
-                            >
-                              {isApproved &&
-                                "টাস্ক সম্পন্ন ✓"}
-
-                              {isRejected &&
-                                "প্রুফ বাতিল হয়েছে"}
-
-                              {isPending &&
-                                "টাস্ক সাবমিট হয়েছে"}
-                            </p>
-
-                            {submission.submitted_at && (
-                              <p className="mt-1 text-[11px] text-gray-500">
-                                জমা দেওয়া হয়েছে{" "}
-                                {formatDate(
-                                  submission.submitted_at
-                                )}
-                              </p>
-                            )}
-                          </div>
-
-                          <span className="text-lg">
-                            {isApproved &&
-                              "✓"}
-
-                            {isRejected &&
-                              "×"}
-
-                            {isPending &&
-                              "⏳"}
-                          </span>
-                        </div>
-
-                        {isPending && (
-                          <p className="mt-2 text-xs font-semibold leading-5 text-yellow-700">
-                            আপনার প্রুফ অ্যাডমিন
-                            রিভিউ করছে। রিভিউ শেষ
-                            না হওয়া পর্যন্ত আবার
-                            সাবমিট করা যাবে না।
-                          </p>
-                        )}
-
-                        {isApproved && (
-                          <p className="mt-2 text-xs font-semibold leading-5 text-green-700">
-                            আপনার টাস্ক সম্পন্ন হয়েছে।
-                            অনুমোদিত রিওয়ার্ড আপনার
-                            ওয়ালেটে যোগ হয়েছে।
-                          </p>
-                        )}
-
-                        {isRejected &&
-                          submission.admin_note && (
-                            <p className="mt-2 text-xs leading-5 text-red-600">
-                              কারণ:{" "}
-                              {
-                                submission.admin_note
-                              }
-                            </p>
-                          )}
-                      </div>
-                    )}
-
-                    {/* =================================================
-                        ACTIONS
-
-                        IMPORTANT:
-                        Pending / Approved:
-                        Start Task + Upload Proof HIDDEN
-
-                        Rejected:
-                        Start Task + Resubmit
-
-                        No submission:
-                        Start Task + Upload Proof
-                    ================================================= */}
-
-                    {isCompleted ? (
-                      <div className="mt-5">
-                        <div className="flex h-12 w-full items-center justify-center rounded-2xl bg-green-50 text-sm font-black text-green-700">
-                          {isApproved
-                            ? "টাস্ক সম্পন্ন ✓"
-                            : "টাস্ক সম্পন্ন • রিভিউ চলছে"}
-                        </div>
-                      </div>
-                    ) : isRejected ? (
-                      <div className="mt-5 grid grid-cols-2 gap-3">
-                        <button
-                          type="button"
-                          onClick={() =>
-                            handleStartTask(
-                              task
-                            )
-                          }
-                          className="flex h-12 items-center justify-center rounded-2xl border border-green-200 bg-green-50 text-sm font-black text-[#4f9d32] transition hover:bg-green-100 active:scale-[0.98]"
-                        >
-                          টাস্ক শুরু করুন
-                        </button>
-
-                        <button
-                          type="button"
-                          onClick={() =>
-                            openSubmission(
-                              task
-                            )
-                          }
-                          className="flex h-12 items-center justify-center rounded-2xl bg-[#7ed957] text-sm font-black text-white shadow-lg shadow-green-100 transition hover:bg-[#6fca4b] active:scale-[0.98]"
-                        >
-                          আবার প্রুফ দিন
-                        </button>
-                      </div>
-                    ) : (
-                      <div className="mt-5 grid grid-cols-2 gap-3">
-                        <button
-                          type="button"
-                          onClick={() =>
-                            handleStartTask(
-                              task
-                            )
-                          }
-                          className="flex h-12 items-center justify-center rounded-2xl border border-green-200 bg-green-50 text-sm font-black text-[#4f9d32] transition hover:bg-green-100 active:scale-[0.98]"
-                        >
-                          টাস্ক শুরু করুন
-                        </button>
-
-                        <button
-                          type="button"
-                          onClick={() =>
-                            openSubmission(
-                              task
-                            )
-                          }
-                          className="flex h-12 items-center justify-center rounded-2xl bg-[#7ed957] text-sm font-black text-white shadow-lg shadow-green-100 transition hover:bg-[#6fca4b] active:scale-[0.98]"
-                        >
-                          প্রুফ আপলোড
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                </article>
-              );
-            })}
-          </section>
+                  <div className="mt-5 h-11 rounded-xl bg-slate-800" />
+                </div>
+              )
+            )}
+          </div>
         )}
 
-        {/* ===================================================
-            HISTORY
-        ==================================================== */}
+        {/* ================================================== */}
+        {/* NO TASK */}
+        {/* ================================================== */}
 
-        {submissions.length > 0 && (
-          <section className="mt-8">
-            <div>
-              <p className="text-xs font-black uppercase tracking-[0.14em] text-gray-400">
-                আপনার কার্যক্রম
+        {!loading &&
+          !errorMessage &&
+          tasks.length === 0 && (
+            <div className="rounded-3xl border border-slate-800 bg-slate-900 p-8 text-center">
+              <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-slate-800 text-3xl">
+                📋
+              </div>
+
+              <h2 className="mt-5 text-xl font-bold">
+                কোনো কাজ পাওয়া যায়নি
+              </h2>
+
+              <p className="mt-2 text-sm leading-6 text-slate-400">
+                আপনার Active Package অনুযায়ী বর্তমানে কোনো কাজ নেই।
               </p>
 
-              <h2 className="mt-1 text-xl font-black text-gray-900">
-                জমা দেওয়ার ইতিহাস
-              </h2>
+              <Link
+                href="/packages"
+                className="mt-5 inline-flex rounded-xl bg-emerald-500 px-5 py-3 text-sm font-bold text-slate-950 transition hover:bg-emerald-400"
+              >
+                প্যাকেজ দেখুন
+              </Link>
             </div>
+          )}
 
-            <div className="mt-4 space-y-3">
-              {submissions.map(
-                (submission) => (
-                  <div
-                    key={submission.id}
-                    className="rounded-2xl border border-gray-100 bg-white p-4 shadow-sm"
-                  >
-                    <div className="flex items-center justify-between gap-3">
-                      <div>
-                        <p className="text-sm font-black text-gray-800">
-                          টাস্ক প্রুফ
-                        </p>
+        {/* ================================================== */}
+        {/* TASK LIST */}
+        {/* ================================================== */}
 
-                        <p className="mt-1 text-[11px] text-gray-400">
-                          {formatDate(
-                            submission.submitted_at
-                          )}
-                        </p>
+        {!loading &&
+          tasks.length > 0 && (
+            <div className="space-y-4">
+              {tasks.map(
+                (task) => {
+                  const submission =
+                    getSubmission(
+                      task
+                    );
+
+                  const submittedThisCycle =
+                    Boolean(
+                      submission
+                    );
+
+                  const isPending =
+                    submission
+                      ?.status ===
+                    "pending";
+
+                  const isApproved =
+                    submission
+                      ?.status ===
+                    "approved";
+
+                  const isRejected =
+                    submission
+                      ?.status ===
+                    "rejected";
+
+                  return (
+                    <div
+                      key={
+                        task.id
+                      }
+                      className="overflow-hidden rounded-3xl border border-slate-800 bg-slate-900 shadow-lg shadow-black/20"
+                    >
+                      {/* ========================================= */}
+                      {/* TASK TOP */}
+                      {/* ========================================= */}
+
+                      <div className="border-b border-slate-800 p-5">
+                        <div className="flex items-start justify-between gap-4">
+                          <div>
+                            <div className="mb-2 inline-flex rounded-full border border-emerald-500/20 bg-emerald-500/10 px-3 py-1 text-xs font-bold text-emerald-400">
+                              ৳
+                              {formatMoney(
+                                task.package_amount
+                              )}{" "}
+                              PACKAGE
+                            </div>
+
+                            <h2 className="text-lg font-bold leading-7">
+                              {
+                                task.title
+                              }
+                            </h2>
+                          </div>
+
+                          <div className="shrink-0 text-right">
+                            <p className="text-xs text-slate-500">
+                              Reward
+                            </p>
+
+                            <p className="text-lg font-extrabold text-emerald-400">
+                              ৳
+                              {formatMoney(
+                                task.reward_amount
+                              )}
+                            </p>
+                          </div>
+                        </div>
+
+                        {task.description && (
+                          <p className="mt-3 text-sm leading-6 text-slate-400">
+                            {
+                              task.description
+                            }
+                          </p>
+                        )}
                       </div>
 
-                      <span
-                        className={`rounded-full px-3 py-1 text-[10px] font-black ${
-                          submission.status ===
-                          "approved"
-                            ? "bg-green-50 text-green-700"
-                            : submission.status ===
-                                "rejected"
-                              ? "bg-red-50 text-red-600"
-                              : "bg-yellow-50 text-yellow-700"
-                        }`}
-                      >
-                        {submission.status ===
-                          "approved" &&
-                          "অনুমোদিত"}
+                      {/* ========================================= */}
+                      {/* CURRENT GLOBAL CYCLE */}
+                      {/* ========================================= */}
 
-                        {submission.status ===
-                          "rejected" &&
-                          "বাতিল"}
+                      <div className="p-5">
+                        <div className="mb-4 rounded-2xl border border-slate-800 bg-slate-950/70 p-4">
+                          <div className="flex items-center justify-between gap-3">
+                            <div>
+                              <p className="text-xs text-slate-500">
+                                এই ২৪ ঘণ্টার সাইকেল
+                              </p>
 
-                        {submission.status ===
-                          "pending" &&
-                          "রিভিউ চলছে"}
-                      </span>
+                              <p className="mt-1 text-sm font-semibold text-slate-200">
+                                সময় বাকি
+                              </p>
+                            </div>
+
+                            <div className="rounded-xl bg-slate-800 px-3 py-2 font-mono text-sm font-bold text-amber-400">
+                              {formatCountdown(
+                                task.remaining_seconds
+                              )}
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* ========================================= */}
+                        {/* SUBMISSION STATUS */}
+                        {/* ========================================= */}
+
+                        {submittedThisCycle && (
+                          <div
+                            className={`mb-4 rounded-2xl border px-4 py-3 ${
+                              isApproved
+                                ? "border-emerald-500/30 bg-emerald-500/10"
+                                : isPending
+                                ? "border-amber-500/30 bg-amber-500/10"
+                                : isRejected
+                                ? "border-red-500/30 bg-red-500/10"
+                                : "border-slate-700 bg-slate-800/50"
+                            }`}
+                          >
+                            <div className="flex items-start gap-3">
+                              <div className="text-xl">
+                                {isApproved
+                                  ? "✅"
+                                  : isPending
+                                  ? "⏳"
+                                  : "❌"}
+                              </div>
+
+                              <div>
+                                <p
+                                  className={`text-sm font-bold ${
+                                    isApproved
+                                      ? "text-emerald-400"
+                                      : isPending
+                                      ? "text-amber-400"
+                                      : "text-red-400"
+                                  }`}
+                                >
+                                  {isApproved
+                                    ? "অনুমোদিত"
+                                    : isPending
+                                    ? "যাচাই চলছে"
+                                    : "প্রত্যাখ্যাত"}
+                                </p>
+
+                                <p className="mt-1 text-xs leading-5 text-slate-400">
+                                  এই ২৪ ঘণ্টার সাইকেলে কাজটি ইতিমধ্যে জমা দেওয়া হয়েছে। পরবর্তী সাইকেল শুরু হলে আবার Submit করতে পারবেন।
+                                </p>
+
+                                {submission?.admin_note && (
+                                  <p className="mt-2 text-xs text-slate-300">
+                                    নোট:{" "}
+                                    {
+                                      submission.admin_note
+                                    }
+                                  </p>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        )}
+
+                        {/* ========================================= */}
+                        {/* ACTION BUTTONS */}
+                        {/* ========================================= */}
+
+                        {!submittedThisCycle && (
+                          <div className="grid grid-cols-2 gap-3">
+                            <button
+                              type="button"
+                              onClick={() =>
+                                handleStartTask(
+                                  task
+                                )
+                              }
+                              className="rounded-xl border border-slate-700 bg-slate-800 px-4 py-3 text-sm font-bold text-white transition hover:bg-slate-700"
+                            >
+                              কাজ শুরু করুন
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() =>
+                                openSubmission(
+                                  task
+                                )
+                              }
+                              className="rounded-xl bg-emerald-500 px-4 py-3 text-sm font-bold text-slate-950 transition hover:bg-emerald-400"
+                            >
+                              প্রুফ আপলোড
+                            </button>
+                          </div>
+                        )}
+
+                        {submittedThisCycle && (
+                          <div className="rounded-xl border border-slate-800 bg-slate-950/50 px-4 py-3 text-center text-xs text-slate-500">
+                            পরবর্তী ২৪ ঘণ্টার সাইকেলে আবার Submit করা যাবে
+                          </div>
+                        )}
+                      </div>
                     </div>
-
-                    {submission.admin_note && (
-                      <p className="mt-3 rounded-xl bg-gray-50 p-3 text-xs leading-5 text-gray-500">
-                        কারণ:{" "}
-                        {
-                          submission.admin_note
-                        }
-                      </p>
-                    )}
-                  </div>
-                )
+                  );
+                }
               )}
             </div>
-          </section>
-        )}
-      </div>
+          )}
 
-      {/* ===================================================
-          SUBMISSION MODAL
-      ==================================================== */}
+        {/* ================================================== */}
+        {/* HISTORY */}
+        {/* ================================================== */}
 
-      {selectedTask && (
-        <div className="fixed inset-0 z-[100] flex items-end justify-center bg-black/50 p-3 sm:items-center">
-          <div className="max-h-[90vh] w-full max-w-md overflow-y-auto rounded-3xl bg-white shadow-2xl">
-            <div className="p-5">
+        {!loading &&
+          submissions.length > 0 && (
+            <div className="mt-8">
+              <div className="mb-4">
+                <h2 className="text-xl font-bold">
+                  Submission History
+                </h2>
 
-              {/* HEADER */}
+                <p className="mt-1 text-sm text-slate-500">
+                  আপনার আগের সব কাজের Submission এখানে থাকবে।
+                </p>
+              </div>
 
+              <div className="space-y-3">
+                {submissions.map(
+                  (
+                    submission
+                  ) => (
+                    <div
+                      key={
+                        submission.id
+                      }
+                      className="rounded-2xl border border-slate-800 bg-slate-900 p-4"
+                    >
+                      <div className="flex items-start justify-between gap-4">
+                        <div className="min-w-0">
+                          <p className="font-semibold text-slate-200">
+                            {submission.title ||
+                              "কাজ"}
+                          </p>
+
+                          <p className="mt-1 text-xs text-slate-500">
+                            Package: ৳
+                            {formatMoney(
+                              Number(
+                                submission.package_amount ||
+                                  0
+                              )
+                            )}
+                          </p>
+
+                          <p className="mt-1 text-xs text-slate-500">
+                            জমা:{" "}
+                            {submission.submitted_at
+                              ? new Date(
+                                  submission.submitted_at
+                                ).toLocaleString(
+                                  "bn-BD"
+                                )
+                              : "-"}
+                          </p>
+
+                          {submission.cycle_started_at && (
+                            <p className="mt-1 text-xs text-slate-600">
+                              Cycle:{" "}
+                              {new Date(
+                                submission.cycle_started_at
+                              ).toLocaleString(
+                                "bn-BD"
+                              )}
+                            </p>
+                          )}
+                        </div>
+
+                        <span
+                          className={`shrink-0 rounded-full px-3 py-1 text-xs font-bold ${
+                            submission.status ===
+                            "approved"
+                              ? "bg-emerald-500/10 text-emerald-400"
+                              : submission.status ===
+                                "pending"
+                              ? "bg-amber-500/10 text-amber-400"
+                              : "bg-red-500/10 text-red-400"
+                          }`}
+                        >
+                          {submission.status ===
+                          "approved"
+                            ? "অনুমোদিত"
+                            : submission.status ===
+                              "pending"
+                            ? "Pending"
+                            : "Rejected"}
+                        </span>
+                      </div>
+
+                      {submission.admin_note && (
+                        <div className="mt-3 rounded-xl bg-slate-950 p-3 text-xs text-slate-400">
+                          Admin Note:{" "}
+                          {
+                            submission.admin_note
+                          }
+                        </div>
+                      )}
+                    </div>
+                  )
+                )}
+              </div>
+            </div>
+          )}
+      </main>
+
+      {/* ====================================================== */}
+      {/* UPLOAD MODAL */}
+      {/* ====================================================== */}
+
+      {showUploadModal &&
+        selectedTask && (
+          <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/70 p-0 sm:items-center sm:p-4">
+            <div className="max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-t-3xl border border-slate-800 bg-slate-900 p-5 sm:rounded-3xl">
               <div className="flex items-start justify-between gap-4">
-                <div className="min-w-0">
-                  <span className="text-[10px] font-black uppercase tracking-[0.14em] text-[#4f9d32]">
-                    প্রুফ জমা দিন
-                  </span>
-
-                  <h2 className="mt-1 text-xl font-black text-gray-900">
-                    {selectedTask.title}
+                <div>
+                  <h2 className="text-xl font-bold">
+                    প্রুফ আপলোড করুন
                   </h2>
 
-                  <p className="mt-1 text-xs font-bold text-gray-400">
-                    পুরস্কার:{" "}
-                    {taka(
-                      selectedTask.reward_amount
-                    )}
+                  <p className="mt-1 text-sm text-slate-400">
+                    {
+                      selectedTask.title
+                    }
                   </p>
                 </div>
 
                 <button
                   type="button"
-                  onClick={closeSubmission}
-                  disabled={uploading}
-                  className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-gray-100 text-lg font-black text-gray-600 disabled:opacity-50"
+                  onClick={
+                    closeUploadModal
+                  }
+                  disabled={
+                    uploading
+                  }
+                  className="flex h-9 w-9 items-center justify-center rounded-full bg-slate-800 text-slate-300 transition hover:bg-slate-700 disabled:opacity-50"
                 >
-                  ×
+                  ✕
                 </button>
               </div>
 
-              {/* INSTRUCTIONS */}
+              <div className="mt-5 rounded-2xl border border-slate-800 bg-slate-950/60 p-4">
+                <div className="flex items-center justify-between">
+                  <span className="text-sm text-slate-400">
+                    Reward
+                  </span>
 
-              <div className="mt-5 rounded-2xl border border-green-100 bg-green-50 p-4">
-                <p className="text-xs font-black text-green-800">
-                  স্ক্রিনশট জমা দেওয়ার নিয়ম
-                </p>
+                  <span className="font-bold text-emerald-400">
+                    ৳
+                    {formatMoney(
+                      selectedTask.reward_amount
+                    )}
+                  </span>
+                </div>
 
-                <p className="mt-2 text-xs leading-5 text-green-700">
-                  প্রথমে টাস্ক শুরু করুন এবং
-                  টাস্কের লিংকে প্রয়োজনীয় কাজ
-                  সম্পন্ন করুন। কাজ শেষ হলে
-                  স্ক্রিনশট আপলোড করে প্রুফ
-                  জমা দিন।
-                </p>
+                <div className="mt-3 flex items-center justify-between">
+                  <span className="text-sm text-slate-400">
+                    Package
+                  </span>
+
+                  <span className="font-semibold">
+                    ৳
+                    {formatMoney(
+                      selectedTask.package_amount
+                    )}
+                  </span>
+                </div>
               </div>
 
-              {/* SCREENSHOT */}
+              {selectedTask.screenshot_required && (
+                <div className="mt-5">
+                  <label className="mb-2 block text-sm font-semibold text-slate-200">
+                    Screenshot
+                  </label>
 
-              <div className="mt-5">
-                <label
-                  htmlFor="task-screenshot"
-                  className="block text-sm font-black text-gray-800"
-                >
-                  স্ক্রিনশট আপলোড
-                  {selectedTask.screenshot_required && (
-                    <span className="ml-1 text-red-500">
-                      *
-                    </span>
-                  )}
-                </label>
+                  <label className="flex cursor-pointer flex-col items-center justify-center rounded-2xl border border-dashed border-slate-700 bg-slate-950/60 px-5 py-8 text-center transition hover:border-emerald-500/50 hover:bg-slate-950">
+                    <div className="text-3xl">
+                      📷
+                    </div>
 
-                <p className="mt-1 text-xs leading-5 text-gray-400">
-                  JPG, PNG বা WEBP • সর্বোচ্চ
-                  ৮ MB
-                </p>
+                    <p className="mt-2 text-sm font-semibold">
+                      Screenshot নির্বাচন করুন
+                    </p>
 
-                <label
-                  htmlFor="task-screenshot"
-                  className="mt-3 flex min-h-32 cursor-pointer flex-col items-center justify-center rounded-2xl border-2 border-dashed border-gray-200 bg-gray-50 px-5 py-6 text-center transition hover:border-green-300 hover:bg-green-50"
-                >
-                  <span className="text-3xl">
-                    📸
-                  </span>
+                    <p className="mt-1 text-xs text-slate-500">
+                      JPG, PNG অথবা WebP
+                    </p>
 
-                  <span className="mt-2 max-w-full truncate px-3 text-sm font-bold text-gray-700">
-                    {screenshot
-                      ? screenshot.name
-                      : "স্ক্রিনশট নির্বাচন করুন"}
-                  </span>
+                    {selectedFile && (
+                      <p className="mt-3 max-w-full truncate text-xs text-emerald-400">
+                        {
+                          selectedFile.name
+                        }
+                      </p>
+                    )}
 
-                  <span className="mt-1 text-[11px] text-gray-400">
-                    ছবি নির্বাচন করতে চাপ দিন
-                  </span>
-
-                  <input
-                    id="task-screenshot"
-                    type="file"
-                    accept="image/png,image/jpeg,image/webp"
-                    onChange={
-                      handleScreenshotChange
-                    }
-                    className="hidden"
-                    disabled={uploading}
-                  />
-                </label>
-              </div>
-
-              {/* ERROR */}
-
-              {error && (
-                <div className="mt-4 rounded-2xl border border-red-100 bg-red-50 p-3 text-xs font-semibold leading-5 text-red-600">
-                  {error}
+                    <input
+                      type="file"
+                      accept="image/*"
+                      onChange={
+                        handleFileChange
+                      }
+                      className="hidden"
+                      disabled={
+                        uploading
+                      }
+                    />
+                  </label>
                 </div>
               )}
 
-              {/* SUBMIT */}
+              {!selectedTask.screenshot_required && (
+                <div className="mt-5 rounded-2xl border border-slate-800 bg-slate-950/60 p-4 text-sm text-slate-400">
+                  এই কাজের জন্য Screenshot প্রয়োজন নেই।
+                </div>
+              )}
 
-              <button
-                type="button"
-                onClick={handleSubmit}
-                disabled={
-                  uploading ||
-                  (selectedTask.screenshot_required &&
-                    !screenshot)
-                }
-                className="mt-5 flex h-12 w-full items-center justify-center rounded-2xl bg-[#7ed957] text-sm font-black text-white shadow-lg shadow-green-100 transition hover:bg-[#6fca4b] active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                {uploading
-                  ? "জমা দেওয়া হচ্ছে..."
-                  : "প্রুফ জমা দিন"}
-              </button>
+              {errorMessage && (
+                <div className="mt-4 rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-300">
+                  {
+                    errorMessage
+                  }
+                </div>
+              )}
 
-              <button
-                type="button"
-                onClick={closeSubmission}
-                disabled={uploading}
-                className="mt-2 flex h-11 w-full items-center justify-center rounded-2xl text-sm font-bold text-gray-500 disabled:opacity-50"
-              >
-                বাতিল
-              </button>
+              <div className="mt-5 grid grid-cols-2 gap-3">
+                <button
+                  type="button"
+                  onClick={
+                    closeUploadModal
+                  }
+                  disabled={
+                    uploading
+                  }
+                  className="rounded-xl border border-slate-700 bg-slate-800 px-4 py-3 text-sm font-bold text-white transition hover:bg-slate-700 disabled:opacity-50"
+                >
+                  বাতিল
+                </button>
+
+                <button
+                  type="button"
+                  onClick={
+                    handleSubmit
+                  }
+                  disabled={
+                    uploading ||
+                    (selectedTask.screenshot_required &&
+                      !selectedFile)
+                  }
+                  className="rounded-xl bg-emerald-500 px-4 py-3 text-sm font-bold text-slate-950 transition hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {uploading
+                    ? "জমা হচ্ছে..."
+                    : "Submit"}
+                </button>
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        )}
 
       <BottomNav />
-    </main>
+    </div>
   );
 }

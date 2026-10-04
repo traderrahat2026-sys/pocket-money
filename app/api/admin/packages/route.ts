@@ -2,15 +2,10 @@ import { NextRequest, NextResponse } from "next/server";
 import crypto from "crypto";
 import { createClient } from "@supabase/supabase-js";
 
-const SESSION_COOKIE_NAME =
-  "pocket_money_admin_session";
+const SESSION_COOKIE_NAME = "pocket_money_admin_session";
+const SESSION_MAX_AGE_SECONDS = 60 * 60 * 24;
 
-const SESSION_MAX_AGE_SECONDS =
-  60 * 60 * 24;
-
-const ADMIN_USERNAME =
-  process.env.ADMIN_USERNAME || "";
-
+const ADMIN_USERNAME = process.env.ADMIN_USERNAME || "";
 const ADMIN_SESSION_SECRET =
   process.env.ADMIN_SESSION_SECRET || "";
 
@@ -19,18 +14,6 @@ const SUPABASE_URL =
 
 const SUPABASE_SERVICE_ROLE_KEY =
   process.env.SUPABASE_SERVICE_ROLE_KEY || "";
-
-const OFFICIAL_PACKAGE_AMOUNTS = [
-  500,
-  1000,
-  1500,
-  2000,
-  3000,
-  5000,
-  10000,
-  20000,
-  25000,
-];
 
 function getSupabaseAdmin() {
   if (
@@ -58,20 +41,10 @@ function safeCompare(
   a: string,
   b: string
 ) {
-  const aBuffer = Buffer.from(
-    a,
-    "utf8"
-  );
+  const aBuffer = Buffer.from(a, "utf8");
+  const bBuffer = Buffer.from(b, "utf8");
 
-  const bBuffer = Buffer.from(
-    b,
-    "utf8"
-  );
-
-  if (
-    aBuffer.length !==
-    bBuffer.length
-  ) {
+  if (aBuffer.length !== bBuffer.length) {
     return false;
   }
 
@@ -93,18 +66,14 @@ function verifySessionToken(
   }
 
   try {
-    const decoded =
-      Buffer.from(
-        token,
-        "base64url"
-      ).toString("utf8");
+    const decoded = Buffer.from(
+      token,
+      "base64url"
+    ).toString("utf8");
 
-    const parts =
-      decoded.split(":");
+    const parts = decoded.split(":");
 
-    if (
-      parts.length !== 3
-    ) {
+    if (parts.length !== 3) {
       return null;
     }
 
@@ -134,28 +103,19 @@ function verifySessionToken(
     const issuedAt =
       Number(issuedAtText);
 
-    if (
-      !Number.isFinite(
-        issuedAt
-      )
-    ) {
+    if (!Number.isFinite(issuedAt)) {
       return null;
     }
 
-    const now =
-      Date.now();
+    const now = Date.now();
 
-    if (
-      issuedAt >
-      now + 60 * 1000
-    ) {
+    if (issuedAt > now + 60 * 1000) {
       return null;
     }
 
     if (
       now - issuedAt >
-      SESSION_MAX_AGE_SECONDS *
-        1000
+      SESSION_MAX_AGE_SECONDS * 1000
     ) {
       return null;
     }
@@ -201,9 +161,7 @@ function getAdminSession(
     return null;
   }
 
-  return verifySessionToken(
-    token
-  );
+  return verifySessionToken(token);
 }
 
 function unauthorizedResponse() {
@@ -222,6 +180,16 @@ function unauthorizedResponse() {
 |--------------------------------------------------------------------------
 | GET PACKAGES
 |--------------------------------------------------------------------------
+|
+| IMPORTANT:
+| public.packages is the ONLY package master source.
+|
+| package_images      = image information
+| package_tasks       = task information
+| user_package_activations = activation information
+|
+| None of these tables create package prices.
+|--------------------------------------------------------------------------
 */
 
 export async function GET(
@@ -229,9 +197,7 @@ export async function GET(
 ) {
   try {
     const session =
-      getAdminSession(
-        request
-      );
+      getAdminSession(request);
 
     if (!session) {
       return unauthorizedResponse();
@@ -241,25 +207,21 @@ export async function GET(
       getSupabaseAdmin();
 
     const { searchParams } =
-      new URL(
-        request.url
-      );
+      new URL(request.url);
 
     const search =
       (
-        searchParams.get(
-          "search"
-        ) || ""
+        searchParams.get("search") ||
+        ""
       ).trim();
 
     const status =
-      searchParams.get(
-        "status"
-      ) || "all";
+      searchParams.get("status") ||
+      "all";
 
     /*
     |--------------------------------------------------------------------------
-    | LOAD PACKAGE MASTER DATA
+    | LOAD MASTER PACKAGES
     |--------------------------------------------------------------------------
     */
 
@@ -284,9 +246,7 @@ export async function GET(
           }
         );
 
-    if (
-      packagesResult.error
-    ) {
+    if (packagesResult.error) {
       console.error(
         "PACKAGES MASTER ERROR:",
         packagesResult.error
@@ -336,9 +296,7 @@ export async function GET(
           }
         );
 
-    if (
-      activationsResult.error
-    ) {
+    if (activationsResult.error) {
       console.error(
         "PACKAGES ACTIVATIONS ERROR:",
         activationsResult.error
@@ -365,9 +323,7 @@ export async function GET(
 
     const tasksResult =
       await supabase
-        .from(
-          "package_tasks"
-        )
+        .from("package_tasks")
         .select(
           `
             id,
@@ -392,9 +348,7 @@ export async function GET(
           }
         );
 
-    if (
-      tasksResult.error
-    ) {
+    if (tasksResult.error) {
       console.error(
         "PACKAGES TASKS ERROR:",
         tasksResult.error
@@ -421,9 +375,7 @@ export async function GET(
 
     const imagesResult =
       await supabase
-        .from(
-          "package_images"
-        )
+        .from("package_images")
         .select(
           `
             id,
@@ -441,9 +393,7 @@ export async function GET(
           }
         );
 
-    if (
-      imagesResult.error
-    ) {
+    if (imagesResult.error) {
       console.error(
         "PACKAGES IMAGES ERROR:",
         imagesResult.error
@@ -476,102 +426,33 @@ export async function GET(
 
     /*
     |--------------------------------------------------------------------------
-    | PACKAGE AMOUNTS
+    | ONLY MASTER PACKAGE AMOUNTS
+    |--------------------------------------------------------------------------
+    |
+    | IMPORTANT:
+    | Do NOT create package prices from:
+    | - package_images
+    | - package_tasks
+    | - user_package_activations
+    | - hardcoded official amounts
+    |
+    | public.packages is the only source.
     |--------------------------------------------------------------------------
     */
 
-    const packageAmountsSet =
-      new Set<number>(
-        OFFICIAL_PACKAGE_AMOUNTS
-      );
-
-    for (
-      const pkg of masterPackages
-    ) {
-      const amount =
-        Number(
-          pkg.package_amount
-        );
-
-      if (
-        Number.isFinite(
-          amount
-        ) &&
-        amount > 0
-      ) {
-        packageAmountsSet.add(
-          amount
-        );
-      }
-    }
-
-    for (
-      const activation of activations
-    ) {
-      const amount =
-        Number(
-          activation.package_amount
-        );
-
-      if (
-        Number.isFinite(
-          amount
-        ) &&
-        amount > 0
-      ) {
-        packageAmountsSet.add(
-          amount
-        );
-      }
-    }
-
-    for (
-      const task of tasks
-    ) {
-      const amount =
-        Number(
-          task.package_amount
-        );
-
-      if (
-        Number.isFinite(
-          amount
-        ) &&
-        amount > 0
-      ) {
-        packageAmountsSet.add(
-          amount
-        );
-      }
-    }
-
-    for (
-      const image of images
-    ) {
-      const amount =
-        Number(
-          image.package_amount
-        );
-
-      if (
-        Number.isFinite(
-          amount
-        ) &&
-        amount > 0
-      ) {
-        packageAmountsSet.add(
-          amount
-        );
-      }
-    }
-
     let packageAmounts =
-      Array.from(
-        packageAmountsSet
-      ).sort(
-        (a, b) =>
-          a - b
-      );
+      masterPackages
+        .map((pkg) =>
+          Number(pkg.package_amount)
+        )
+        .filter(
+          (amount) =>
+            Number.isFinite(amount) &&
+            amount > 0
+        )
+        .sort(
+          (a, b) => a - b
+        );
 
     if (search) {
       packageAmounts =
@@ -579,15 +460,13 @@ export async function GET(
           (amount) =>
             amount
               .toString()
-              .includes(
-                search
-              )
+              .includes(search)
         );
     }
 
     /*
     |--------------------------------------------------------------------------
-    | BUILD PACKAGES
+    | BUILD PACKAGE DATA
     |--------------------------------------------------------------------------
     */
 
@@ -613,15 +492,13 @@ export async function GET(
           const activeActivations =
             packageActivations.filter(
               (activation) =>
-                activation.is_active ===
-                true
+                activation.is_active === true
             );
 
           const inactiveActivations =
             packageActivations.filter(
               (activation) =>
-                activation.is_active !==
-                true
+                activation.is_active !== true
             );
 
           const activeUserIds =
@@ -631,9 +508,7 @@ export async function GET(
             const activation of
               activeActivations
           ) {
-            if (
-              activation.user_id
-            ) {
+            if (activation.user_id) {
               activeUserIds.add(
                 activation.user_id
               );
@@ -647,9 +522,7 @@ export async function GET(
             const activation of
               packageActivations
           ) {
-            if (
-              activation.user_id
-            ) {
+            if (activation.user_id) {
               totalUserIds.add(
                 activation.user_id
               );
@@ -667,15 +540,13 @@ export async function GET(
           const activeTasks =
             packageTasks.filter(
               (task) =>
-                task.is_active ===
-                true
+                task.is_active === true
             );
 
           const inactiveTasks =
             packageTasks.filter(
               (task) =>
-                task.is_active !==
-                true
+                task.is_active !== true
             );
 
           const packageImages =
@@ -694,36 +565,39 @@ export async function GET(
               ) =>
                 total +
                 Number(
-                  task.reward_amount ||
-                    0
+                  task.reward_amount || 0
                 ),
               0
             );
 
           const primaryImage =
-            packageImages[0] ||
-            null;
+            packageImages[0] || null;
 
           const latestActivation =
-            packageActivations[0] ||
-            null;
+            packageActivations[0] || null;
+
+          /*
+          |--------------------------------------------------------------------------
+          | MASTER REWARD
+          |--------------------------------------------------------------------------
+          */
 
           const dailyReward =
             Number(
-              masterPackage?.daily_reward ||
-                0
+              masterPackage?.daily_reward || 0
             );
 
           const durationDays =
             Number(
-              masterPackage?.duration_days ||
-                30
+              masterPackage?.duration_days || 30
             );
+
+          const totalEarning =
+            dailyReward * durationDays;
 
           return {
             id:
-              masterPackage?.id ||
-              null,
+              masterPackage?.id || null,
 
             package_amount:
               amount,
@@ -743,14 +617,19 @@ export async function GET(
             durationDays:
               durationDays,
 
+            total_earning:
+              totalEarning,
+
+            totalEarning:
+              totalEarning,
+
             is_active:
               masterPackage
                 ? masterPackage.is_active
-                : true,
+                : false,
 
             active:
-              activeUserIds.size >
-              0,
+              activeUserIds.size > 0,
 
             activeUsers:
               activeUserIds.size,
@@ -779,19 +658,13 @@ export async function GET(
               packageImages.length,
 
             image:
-              primaryImage
-                ?.image_url ||
-              "",
+              primaryImage?.image_url || "",
 
             imageId:
-              primaryImage
-                ?.id ||
-              null,
+              primaryImage?.id || null,
 
             storagePath:
-              primaryImage
-                ?.storage_path ||
-              null,
+              primaryImage?.storage_path || null,
 
             images:
               packageImages,
@@ -816,27 +689,19 @@ export async function GET(
     let filteredPackages =
       packages;
 
-    if (
-      status ===
-      "active"
-    ) {
+    if (status === "active") {
       filteredPackages =
         packages.filter(
           (pkg) =>
-            pkg.activeUsers >
-            0
+            pkg.activeUsers > 0
         );
     }
 
-    if (
-      status ===
-      "inactive"
-    ) {
+    if (status === "inactive") {
       filteredPackages =
         packages.filter(
           (pkg) =>
-            pkg.activeUsers ===
-            0
+            pkg.activeUsers === 0
         );
     }
 
@@ -858,8 +723,7 @@ export async function GET(
           ) =>
             total +
             Number(
-              pkg.activeUsers ||
-                0
+              pkg.activeUsers || 0
             ),
           0
         ),
@@ -872,8 +736,7 @@ export async function GET(
           ) =>
             total +
             Number(
-              pkg.totalUsers ||
-                0
+              pkg.totalUsers || 0
             ),
           0
         ),
@@ -886,8 +749,7 @@ export async function GET(
           ) =>
             total +
             Number(
-              pkg.totalActivations ||
-                0
+              pkg.totalActivations || 0
             ),
           0
         ),
@@ -900,8 +762,7 @@ export async function GET(
           ) =>
             total +
             Number(
-              pkg.totalTasks ||
-                0
+              pkg.totalTasks || 0
             ),
           0
         ),
@@ -914,8 +775,7 @@ export async function GET(
           ) =>
             total +
             Number(
-              pkg.activeTasks ||
-                0
+              pkg.activeTasks || 0
             ),
           0
         ),
@@ -928,8 +788,7 @@ export async function GET(
           ) =>
             total +
             Number(
-              pkg.imagesCount ||
-                0
+              pkg.imagesCount || 0
             ),
           0
         ),
@@ -942,8 +801,7 @@ export async function GET(
           ) =>
             total +
             Number(
-              pkg.totalRewards ||
-                0
+              pkg.totalRewards || 0
             ),
           0
         ),
@@ -958,8 +816,14 @@ export async function GET(
 
         summary,
 
+        /*
+        |----------------------------------------------------------------------
+        | These now also come ONLY from public.packages
+        |----------------------------------------------------------------------
+        */
+
         officialPackages:
-          OFFICIAL_PACKAGE_AMOUNTS,
+          packageAmounts,
 
         packageAmounts,
       },
@@ -991,7 +855,7 @@ export async function GET(
 /*
 |--------------------------------------------------------------------------
 | POST
-| PACKAGE IMAGE OR PACKAGE
+| CREATE PACKAGE OR PACKAGE IMAGE
 |--------------------------------------------------------------------------
 */
 
@@ -1000,9 +864,7 @@ export async function POST(
 ) {
   try {
     const session =
-      getAdminSession(
-        request
-      );
+      getAdminSession(request);
 
     if (!session) {
       return unauthorizedResponse();
@@ -1019,14 +881,11 @@ export async function POST(
 
     /*
     |--------------------------------------------------------------------------
-    | CREATE PACKAGE
+    | CREATE PACKAGE MASTER
     |--------------------------------------------------------------------------
     */
 
-    if (
-      action ===
-      "package"
-    ) {
+    if (action === "package") {
       const packageAmount =
         Number(
           body.package_amount
@@ -1039,13 +898,11 @@ export async function POST(
 
       const durationDays =
         Number(
-          body.duration_days ??
-            30
+          body.duration_days ?? 30
         );
 
       const isActive =
-        body.is_active !==
-        false;
+        body.is_active !== false;
 
       if (
         !Number.isFinite(
@@ -1101,6 +958,50 @@ export async function POST(
         );
       }
 
+      /*
+      |----------------------------------------------------------------------
+      | DUPLICATE PRICE CHECK
+      |----------------------------------------------------------------------
+      */
+
+      const {
+        data: existingPackage,
+        error: existingPackageError,
+      } = await supabase
+        .from("packages")
+        .select("id")
+        .eq(
+          "package_amount",
+          packageAmount
+        )
+        .maybeSingle();
+
+      if (existingPackageError) {
+        return NextResponse.json(
+          {
+            success: false,
+            error:
+              existingPackageError.message,
+          },
+          {
+            status: 500,
+          }
+        );
+      }
+
+      if (existingPackage) {
+        return NextResponse.json(
+          {
+            success: false,
+            error:
+              "A package with this price already exists.",
+          },
+          {
+            status: 409,
+          }
+        );
+      }
+
       const {
         data,
         error,
@@ -1131,8 +1032,7 @@ export async function POST(
         return NextResponse.json(
           {
             success: false,
-            error:
-              error.message,
+            error: error.message,
           },
           {
             status: 500,
@@ -1198,6 +1098,51 @@ export async function POST(
       );
     }
 
+    /*
+    |--------------------------------------------------------------------------
+    | IMAGE MUST BELONG TO EXISTING MASTER PACKAGE
+    |--------------------------------------------------------------------------
+    */
+
+    const {
+      data: masterPackage,
+      error:
+        masterPackageError,
+    } = await supabase
+      .from("packages")
+      .select("id")
+      .eq(
+        "package_amount",
+        packageAmount
+      )
+      .maybeSingle();
+
+    if (masterPackageError) {
+      return NextResponse.json(
+        {
+          success: false,
+          error:
+            masterPackageError.message,
+        },
+        {
+          status: 500,
+        }
+      );
+    }
+
+    if (!masterPackage) {
+      return NextResponse.json(
+        {
+          success: false,
+          error:
+            "This package does not exist in the master package table.",
+        },
+        {
+          status: 400,
+        }
+      );
+    }
+
     if (!imageUrl) {
       return NextResponse.json(
         {
@@ -1215,9 +1160,7 @@ export async function POST(
       data,
       error,
     } = await supabase
-      .from(
-        "package_images"
-      )
+      .from("package_images")
       .insert({
         package_amount:
           packageAmount,
@@ -1226,8 +1169,7 @@ export async function POST(
           imageUrl,
 
         storage_path:
-          storagePath ||
-          null,
+          storagePath || null,
       })
       .select()
       .single();
@@ -1241,8 +1183,7 @@ export async function POST(
       return NextResponse.json(
         {
           success: false,
-          error:
-            error.message,
+          error: error.message,
         },
         {
           status: 500,
@@ -1278,7 +1219,7 @@ export async function POST(
 /*
 |--------------------------------------------------------------------------
 | PATCH
-| PACKAGE MASTER / PACKAGE IMAGE
+| UPDATE PACKAGE MASTER OR PACKAGE IMAGE
 |--------------------------------------------------------------------------
 */
 
@@ -1287,9 +1228,7 @@ export async function PATCH(
 ) {
   try {
     const session =
-      getAdminSession(
-        request
-      );
+      getAdminSession(request);
 
     if (!session) {
       return unauthorizedResponse();
@@ -1308,8 +1247,7 @@ export async function PATCH(
     */
 
     if (
-      body.type ===
-      "package" ||
+      body.type === "package" ||
       body.package_id
     ) {
       const packageId =
@@ -1350,9 +1288,7 @@ export async function PATCH(
         )
         .maybeSingle();
 
-      if (
-        currentPackageError
-      ) {
+      if (currentPackageError) {
         return NextResponse.json(
           {
             success: false,
@@ -1383,13 +1319,35 @@ export async function PATCH(
           currentPackage.package_amount
         );
 
-      const newAmount =
-        body.package_amount !==
+      /*
+      |--------------------------------------------------------------------------
+      | IMPORTANT FIX
+      |--------------------------------------------------------------------------
+      |
+      | Admin page sends:
+      |
+      | package_amount      = old/current amount
+      | new_package_amount  = new amount
+      |
+      | Previously the API ignored new_package_amount.
+      |
+      */
+
+      const requestedNewAmount =
+        body.new_package_amount !==
         undefined
           ? Number(
-              body.package_amount
+              body.new_package_amount
             )
-          : oldAmount;
+          : body.package_amount !==
+              undefined
+            ? Number(
+                body.package_amount
+              )
+            : oldAmount;
+
+      const newAmount =
+        requestedNewAmount;
 
       const dailyReward =
         body.daily_reward !==
@@ -1409,7 +1367,7 @@ export async function PATCH(
             )
           : Number(
               currentPackage.duration_days
-          );
+            );
 
       const isActive =
         body.is_active !==
@@ -1502,9 +1460,7 @@ export async function PATCH(
           )
           .maybeSingle();
 
-        if (
-          duplicateError
-        ) {
+        if (duplicateError) {
           return NextResponse.json(
             {
               success: false,
@@ -1517,9 +1473,7 @@ export async function PATCH(
           );
         }
 
-        if (
-          duplicatePackage
-        ) {
+        if (duplicatePackage) {
           return NextResponse.json(
             {
               success: false,
@@ -1534,19 +1488,17 @@ export async function PATCH(
 
         /*
         |--------------------------------------------------------------------------
-        | UPDATE EXISTING REFERENCES
+        | UPDATE OLD PRICE REFERENCES
         |--------------------------------------------------------------------------
         |
-        | package_amount is currently used as the
-        | package identifier in these existing tables.
-        |
+        | Existing system uses package_amount as the
+        | package identifier in these tables.
+        |--------------------------------------------------------------------------
         */
 
         const taskUpdate =
           await supabase
-            .from(
-              "package_tasks"
-            )
+            .from("package_tasks")
             .update({
               package_amount:
                 newAmount,
@@ -1556,9 +1508,7 @@ export async function PATCH(
               oldAmount
             );
 
-        if (
-          taskUpdate.error
-        ) {
+        if (taskUpdate.error) {
           return NextResponse.json(
             {
               success: false,
@@ -1573,9 +1523,7 @@ export async function PATCH(
 
         const imageUpdate =
           await supabase
-            .from(
-              "package_images"
-            )
+            .from("package_images")
             .update({
               package_amount:
                 newAmount,
@@ -1585,9 +1533,7 @@ export async function PATCH(
               oldAmount
             );
 
-        if (
-          imageUpdate.error
-        ) {
+        if (imageUpdate.error) {
           return NextResponse.json(
             {
               success: false,
@@ -1614,9 +1560,7 @@ export async function PATCH(
               oldAmount
             );
 
-        if (
-          activationUpdate.error
-        ) {
+        if (activationUpdate.error) {
           return NextResponse.json(
             {
               success: false,
@@ -1632,7 +1576,7 @@ export async function PATCH(
 
       /*
       |--------------------------------------------------------------------------
-      | UPDATE PACKAGE MASTER
+      | UPDATE MASTER PACKAGE
       |--------------------------------------------------------------------------
       */
 
@@ -1673,8 +1617,7 @@ export async function PATCH(
         return NextResponse.json(
           {
             success: false,
-            error:
-              error.message,
+            error: error.message,
           },
           {
             status: 500,
@@ -1711,10 +1654,7 @@ export async function PATCH(
     }
 
     const updateData:
-      Record<
-        string,
-        unknown
-      > = {};
+      Record<string, unknown> = {};
 
     if (
       body.package_amount !==
@@ -1736,6 +1676,51 @@ export async function PATCH(
             success: false,
             error:
               "Invalid package amount.",
+          },
+          {
+            status: 400,
+          }
+        );
+      }
+
+      /*
+      |--------------------------------------------------------------------------
+      | IMAGE PRICE MUST MATCH MASTER PACKAGE
+      |--------------------------------------------------------------------------
+      */
+
+      const {
+        data: masterPackage,
+        error:
+          masterPackageError,
+      } = await supabase
+        .from("packages")
+        .select("id")
+        .eq(
+          "package_amount",
+          packageAmount
+        )
+        .maybeSingle();
+
+      if (masterPackageError) {
+        return NextResponse.json(
+          {
+            success: false,
+            error:
+              masterPackageError.message,
+          },
+          {
+            status: 500,
+          }
+        );
+      }
+
+      if (!masterPackage) {
+        return NextResponse.json(
+          {
+            success: false,
+            error:
+              "This package price does not exist in the master package table.",
           },
           {
             status: 400,
@@ -1777,16 +1762,9 @@ export async function PATCH(
       data,
       error,
     } = await supabase
-      .from(
-        "package_images"
-      )
-      .update(
-        updateData
-      )
-      .eq(
-        "id",
-        id
-      )
+      .from("package_images")
+      .update(updateData)
+      .eq("id", id)
       .select()
       .single();
 
@@ -1799,8 +1777,7 @@ export async function PATCH(
       return NextResponse.json(
         {
           success: false,
-          error:
-            error.message,
+          error: error.message,
         },
         {
           status: 500,
@@ -1844,9 +1821,7 @@ export async function DELETE(
 ) {
   try {
     const session =
-      getAdminSession(
-        request
-      );
+      getAdminSession(request);
 
     if (!session) {
       return unauthorizedResponse();
@@ -1856,17 +1831,11 @@ export async function DELETE(
       getSupabaseAdmin();
 
     const { searchParams } =
-      new URL(
-        request.url
-      );
+      new URL(request.url);
 
     const id =
-      searchParams.get(
-        "id"
-      ) ||
-      searchParams.get(
-        "imageId"
-      );
+      searchParams.get("id") ||
+      searchParams.get("imageId");
 
     if (!id) {
       return NextResponse.json(
@@ -1884,14 +1853,9 @@ export async function DELETE(
     const {
       error,
     } = await supabase
-      .from(
-        "package_images"
-      )
+      .from("package_images")
       .delete()
-      .eq(
-        "id",
-        id
-      );
+      .eq("id", id);
 
     if (error) {
       console.error(
@@ -1902,8 +1866,7 @@ export async function DELETE(
       return NextResponse.json(
         {
           success: false,
-          error:
-            error.message,
+          error: error.message,
         },
         {
           status: 500,

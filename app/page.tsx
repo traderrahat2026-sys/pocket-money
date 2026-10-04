@@ -6,26 +6,16 @@ import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 
 type Package = {
-  id: number;
+  id: string;
   amount: number;
   dailyEarning: number;
   duration: number;
+  isActive: boolean;
 };
-
-const packages: Package[] = [
-  { id: 1, amount: 500, dailyEarning: 100, duration: 30 },
-  { id: 2, amount: 1000, dailyEarning: 250, duration: 30 },
-  { id: 3, amount: 1500, dailyEarning: 500, duration: 30 },
-  { id: 4, amount: 2000, dailyEarning: 400, duration: 30 },
-  { id: 5, amount: 3000, dailyEarning: 800, duration: 30 },
-  { id: 6, amount: 5000, dailyEarning: 1000, duration: 30 },
-  { id: 7, amount: 10000, dailyEarning: 2000, duration: 30 },
-  { id: 8, amount: 20000, dailyEarning: 4000, duration: 30 },
-  { id: 9, amount: 25000, dailyEarning: 5000, duration: 30 },
-];
 
 function taka(amount: number | null | undefined) {
   const safeAmount = Number(amount ?? 0);
+
   return `৳${safeAmount.toLocaleString("en-BD")}`;
 }
 
@@ -103,7 +93,22 @@ export default function Home() {
 
   const [referralCount, setReferralCount] = useState(0);
   const [referralClaimed, setReferralClaimed] = useState(false);
-  const [loadingReferral, setLoadingReferral] = useState(false);
+  const [loadingReferral, setLoadingReferral] =
+    useState(false);
+
+  /* =====================================================
+     PACKAGES FROM DATABASE
+  ===================================================== */
+
+  const [packages, setPackages] = useState<Package[]>(
+    []
+  );
+
+  const [loadingPackages, setLoadingPackages] =
+    useState(true);
+
+  const [packageError, setPackageError] =
+    useState<string | null>(null);
 
   const requiredReferrals = 10;
 
@@ -114,6 +119,153 @@ export default function Home() {
 
   const referralCompleted =
     referralProgress >= requiredReferrals;
+
+  /* =====================================================
+     LOAD PACKAGES FROM SUPABASE
+  ===================================================== */
+
+  async function loadPackages() {
+    try {
+      setPackageError(null);
+
+      const {
+        data,
+        error,
+      } = await supabase
+        .from("packages")
+        .select(
+          "id, package_amount, daily_reward, duration_days, is_active"
+        )
+        .eq("is_active", true)
+        .order("package_amount", {
+          ascending: true,
+        });
+
+      if (error) {
+        console.error(
+          "HOME PACKAGES LOAD ERROR:",
+          error
+        );
+
+        setPackages([]);
+        setPackageError(
+          "প্যাকেজ তথ্য লোড করা যাচ্ছে না।"
+        );
+
+        return;
+      }
+
+      const mappedPackages: Package[] = (
+        data ?? []
+      ).map((row) => ({
+        id: String(row.id),
+        amount: Number(row.package_amount ?? 0),
+        dailyEarning: Number(
+          row.daily_reward ?? 0
+        ),
+        duration: Number(
+          row.duration_days ?? 30
+        ),
+        isActive: Boolean(
+          row.is_active
+        ),
+      }));
+
+      setPackages(mappedPackages);
+    } catch (error) {
+      console.error(
+        "HOME PACKAGES FETCH ERROR:",
+        error
+      );
+
+      setPackages([]);
+      setPackageError(
+        "প্যাকেজ তথ্য লোড করা যাচ্ছে না।"
+      );
+    } finally {
+      setLoadingPackages(false);
+    }
+  }
+
+  /* =====================================================
+     PACKAGE INITIAL LOAD
+  ===================================================== */
+
+  useEffect(() => {
+    let mounted = true;
+
+    async function initializePackages() {
+      if (!mounted) return;
+
+      setLoadingPackages(true);
+
+      await loadPackages();
+    }
+
+    initializePackages();
+
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  /* =====================================================
+     PACKAGE REALTIME UPDATE
+  ===================================================== */
+
+  useEffect(() => {
+    const channel = supabase
+      .channel("home-packages-live")
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "packages",
+        },
+        () => {
+          loadPackages();
+        }
+      )
+      .subscribe();
+
+    const handleFocus = () => {
+      loadPackages();
+    };
+
+    const handleVisibilityChange = () => {
+      if (
+        document.visibilityState ===
+        "visible"
+      ) {
+        loadPackages();
+      }
+    };
+
+    window.addEventListener(
+      "focus",
+      handleFocus
+    );
+
+    document.addEventListener(
+      "visibilitychange",
+      handleVisibilityChange
+    );
+
+    return () => {
+      window.removeEventListener(
+        "focus",
+        handleFocus
+      );
+
+      document.removeEventListener(
+        "visibilitychange",
+        handleVisibilityChange
+      );
+
+      supabase.removeChannel(channel);
+    };
+  }, []);
 
   /* =====================================================
      AUTH
@@ -560,7 +712,6 @@ export default function Home() {
                   অতিরিক্ত
                 </p>
 
-                {/* পরিবর্তন: ৳৫০০ → ৳২০০ */}
                 <p className="text-sm font-black text-green-400">
                   +৳২০০
                 </p>
@@ -593,7 +744,6 @@ export default function Home() {
                   বোনাস
                 </p>
 
-                {/* পরিবর্তন: ৳৫০০ → ৳২০০ */}
                 <p className="mt-0.5 text-xl font-black text-green-400 sm:text-2xl">
                   ৳২০০
                 </p>
@@ -610,7 +760,6 @@ export default function Home() {
                   মোট
                 </p>
 
-                {/* পরিবর্তন: ৳২,৫০০ → ৳২,২০০ */}
                 <p className="text-base font-black text-white">
                   ৳২,২০০
                 </p>
@@ -793,19 +942,79 @@ export default function Home() {
 
           </div>
 
-          <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          {/* DATABASE PACKAGE LOADING */}
 
-            {packages.map(
-              (pkg, index) => (
-                <PackageCard
-                  key={pkg.id}
-                  pkg={pkg}
-                  index={index}
-                />
-              )
-            )}
+          {loadingPackages ? (
+            <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
 
-          </div>
+              {Array.from({
+                length: 6,
+              }).map((_, index) => (
+                <div
+                  key={index}
+                  className="overflow-hidden rounded-[23px] border border-slate-200/80 bg-white shadow-sm"
+                >
+                  <div className="h-[154px] animate-pulse bg-slate-100" />
+
+                  <div className="p-3.5">
+                    <div className="h-[76px] animate-pulse rounded-2xl bg-slate-100" />
+
+                    <div className="mt-3 h-10 animate-pulse rounded-xl bg-slate-100" />
+                  </div>
+                </div>
+              ))}
+
+            </div>
+          ) : packageError ? (
+            <div className="mt-4 rounded-2xl border border-red-100 bg-red-50 p-5 text-center">
+
+              <p className="text-sm font-black text-red-700">
+                {packageError}
+              </p>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setLoadingPackages(true);
+                  loadPackages();
+                }}
+                className="mt-3 rounded-xl bg-red-600 px-4 py-2.5 text-xs font-black text-white"
+              >
+                আবার চেষ্টা করুন
+              </button>
+
+            </div>
+          ) : packages.length === 0 ? (
+            <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-6 text-center shadow-sm">
+
+              <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-slate-100 text-lg">
+                📦
+              </div>
+
+              <p className="mt-3 text-sm font-black text-slate-800">
+                বর্তমানে কোনো প্যাকেজ নেই
+              </p>
+
+              <p className="mt-1 text-xs text-slate-500">
+                অ্যাডমিন প্যানেল থেকে সক্রিয় প্যাকেজ যোগ করুন।
+              </p>
+
+            </div>
+          ) : (
+            <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+
+              {packages.map(
+                (pkg, index) => (
+                  <PackageCard
+                    key={pkg.id}
+                    pkg={pkg}
+                    index={index}
+                  />
+                )
+              )}
+
+            </div>
+          )}
 
         </section>
 
