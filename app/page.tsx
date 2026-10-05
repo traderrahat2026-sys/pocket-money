@@ -91,8 +91,27 @@ export default function Home() {
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [checkingAuth, setCheckingAuth] = useState(true);
 
+  /* =====================================================
+     HOME POPUPS
+  ===================================================== */
+
+  const [homePopup, setHomePopup] = useState<
+    1 | 2 | null
+  >(null);
+
+  const [telegramLink, setTelegramLink] =
+    useState("");
+
+  const [loadingTelegram, setLoadingTelegram] =
+    useState(false);
+
+  /* =====================================================
+     REFERRAL
+  ===================================================== */
+
   const [referralCount, setReferralCount] = useState(0);
-  const [referralClaimed, setReferralClaimed] = useState(false);
+  const [referralClaimed, setReferralClaimed] =
+    useState(false);
   const [loadingReferral, setLoadingReferral] =
     useState(false);
 
@@ -100,9 +119,8 @@ export default function Home() {
      PACKAGES FROM DATABASE
   ===================================================== */
 
-  const [packages, setPackages] = useState<Package[]>(
-    []
-  );
+  const [packages, setPackages] =
+    useState<Package[]>([]);
 
   const [loadingPackages, setLoadingPackages] =
     useState(true);
@@ -119,6 +137,131 @@ export default function Home() {
 
   const referralCompleted =
     referralProgress >= requiredReferrals;
+
+  /* =====================================================
+     LOAD TELEGRAM LINK FROM ADMIN SETTINGS
+  ===================================================== */
+
+  async function loadTelegramLink() {
+    try {
+      setLoadingTelegram(true);
+
+      const { data, error } = await supabase
+        .from("admin_settings")
+        .select(
+          "setting_key, setting_value, is_public"
+        )
+        .eq("is_public", true);
+
+      if (error) {
+        console.error(
+          "HOME TELEGRAM SETTINGS ERROR:",
+          error
+        );
+
+        setTelegramLink("");
+        return;
+      }
+
+      const rows = Array.isArray(data)
+        ? data
+        : [];
+
+      /*
+        Telegram setting key hardcode করা হয়নি।
+
+        Admin Settings-এর যেকোনো public setting-এর
+        key যদি telegram/channel/support/community
+        সম্পর্কিত হয় এবং value একটি valid URL হয়,
+        সেটি Telegram link হিসেবে ব্যবহার করবে।
+      */
+
+      const telegramSetting = rows.find(
+        (row) => {
+          const key = String(
+            row?.setting_key ?? ""
+          ).toLowerCase();
+
+          const value = String(
+            row?.setting_value ?? ""
+          ).trim();
+
+          const keyLooksLikeTelegram =
+            key.includes("telegram") ||
+            key.includes("channel") ||
+            key.includes("telegram_channel") ||
+            key.includes("telegram_link") ||
+            key.includes("telegram_url");
+
+          const valueLooksLikeTelegram =
+            value.startsWith("https://t.me/") ||
+            value.startsWith("http://t.me/") ||
+            value.startsWith("https://telegram.me/") ||
+            value.startsWith("http://telegram.me/");
+
+          return (
+            keyLooksLikeTelegram &&
+            valueLooksLikeTelegram
+          );
+        }
+      );
+
+      if (telegramSetting?.setting_value) {
+        setTelegramLink(
+          String(
+            telegramSetting.setting_value
+          ).trim()
+        );
+        return;
+      }
+
+      /*
+        Fallback:
+        যদি Admin setting key-এর নাম আলাদা হয়,
+        কিন্তু public value সরাসরি t.me link হয়,
+        সেটিও খুঁজে নেবে।
+      */
+
+      const directTelegramSetting =
+        rows.find((row) => {
+          const value = String(
+            row?.setting_value ?? ""
+          ).trim();
+
+          return (
+            value.startsWith("https://t.me/") ||
+            value.startsWith("http://t.me/") ||
+            value.startsWith(
+              "https://telegram.me/"
+            ) ||
+            value.startsWith(
+              "http://telegram.me/"
+            )
+          );
+        });
+
+      if (
+        directTelegramSetting?.setting_value
+      ) {
+        setTelegramLink(
+          String(
+            directTelegramSetting.setting_value
+          ).trim()
+        );
+      } else {
+        setTelegramLink("");
+      }
+    } catch (error) {
+      console.error(
+        "HOME TELEGRAM FETCH ERROR:",
+        error
+      );
+
+      setTelegramLink("");
+    } finally {
+      setLoadingTelegram(false);
+    }
+  }
 
   /* =====================================================
      LOAD PACKAGES FROM SUPABASE
@@ -159,7 +302,9 @@ export default function Home() {
         data ?? []
       ).map((row) => ({
         id: String(row.id),
-        amount: Number(row.package_amount ?? 0),
+        amount: Number(
+          row.package_amount ?? 0
+        ),
         dailyEarning: Number(
           row.daily_reward ?? 0
         ),
@@ -290,8 +435,22 @@ export default function Home() {
           );
 
           setIsLoggedIn(false);
+          setHomePopup(null);
         } else {
-          setIsLoggedIn(!!user);
+          const loggedIn = !!user;
+
+          setIsLoggedIn(loggedIn);
+
+          /*
+            Already logged-in user Home page খুললে
+            Popup 1 দেখাবে।
+          */
+          if (loggedIn) {
+            setHomePopup(1);
+            loadTelegramLink();
+          } else {
+            setHomePopup(null);
+          }
         }
       } catch (error) {
         console.error(
@@ -301,6 +460,7 @@ export default function Home() {
 
         if (mounted) {
           setIsLoggedIn(false);
+          setHomePopup(null);
         }
       } finally {
         if (mounted) {
@@ -322,20 +482,58 @@ export default function Home() {
         ) {
           setIsLoggedIn(false);
           setCheckingAuth(false);
+          setHomePopup(null);
+          setTelegramLink("");
           return;
         }
 
         if (
-          event === "SIGNED_IN" ||
-          event === "INITIAL_SESSION" ||
+          event === "SIGNED_IN"
+        ) {
+          setIsLoggedIn(true);
+          setCheckingAuth(false);
+
+          /*
+            Login সফল হওয়ার সাথে সাথেই Popup 1।
+          */
+          setHomePopup(1);
+
+          loadTelegramLink();
+
+          return;
+        }
+
+        if (
+          event === "INITIAL_SESSION"
+        ) {
+          const loggedIn =
+            !!session?.user;
+
+          setIsLoggedIn(loggedIn);
+          setCheckingAuth(false);
+
+          if (loggedIn) {
+            setHomePopup(1);
+            loadTelegramLink();
+          } else {
+            setHomePopup(null);
+          }
+
+          return;
+        }
+
+        if (
           event === "TOKEN_REFRESHED" ||
           event === "USER_UPDATED"
         ) {
-          setIsLoggedIn(
-            !!session?.user
-          );
+          const loggedIn =
+            !!session?.user;
 
-          setCheckingAuth(false);
+          setIsLoggedIn(loggedIn);
+
+          if (!loggedIn) {
+            setHomePopup(null);
+          }
         }
       }
     );
@@ -387,6 +585,7 @@ export default function Home() {
           setReferralCount(0);
           setReferralClaimed(false);
           setIsLoggedIn(false);
+          setHomePopup(null);
 
           return;
         }
@@ -507,6 +706,7 @@ export default function Home() {
 
       if (!user) {
         setIsLoggedIn(false);
+        setHomePopup(null);
         router.push("/login");
         return;
       }
@@ -549,18 +749,293 @@ export default function Home() {
     }
   };
 
+  /* =====================================================
+     HOME POPUP HANDLERS
+  ===================================================== */
+
+  const closeFirstPopup = () => {
+    /*
+      Popup 1 বন্ধ করলে Popup 2 দেখাবে।
+    */
+    setHomePopup(2);
+
+    /*
+      Telegram link না থাকলে আবার fetch করার চেষ্টা।
+    */
+    if (!telegramLink) {
+      loadTelegramLink();
+    }
+  };
+
+  const closeSecondPopup = () => {
+    setHomePopup(null);
+  };
+
   return (
     <main className="min-h-screen bg-[#f7f9f8] pb-24 text-slate-900">
 
-      {/* HEADER */}
+      {/* =================================================
+          HOME POPUP 1
+      ================================================= */}
+
+      {isLoggedIn &&
+      !checkingAuth &&
+      homePopup === 1 ? (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/45 px-4 backdrop-blur-[3px]">
+
+          <div className="w-full max-w-[340px] overflow-hidden rounded-[24px] border border-white/70 bg-white shadow-[0_24px_70px_rgba(15,23,42,0.25)]">
+
+            <div className="relative overflow-hidden bg-gradient-to-br from-green-600 via-emerald-600 to-green-700 px-5 py-5 text-white">
+
+              <div className="absolute -right-8 -top-8 h-28 w-28 rounded-full bg-white/10 blur-2xl" />
+
+              <div className="relative flex items-center gap-3">
+
+                <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-white/15 text-xl shadow-inner">
+                  🎁
+                </div>
+
+                <div>
+                  <p className="text-[9px] font-bold text-green-100">
+                    নতুন সদস্যের জন্য
+                  </p>
+
+                  <h2 className="mt-0.5 text-lg font-black">
+                    রেজিস্ট্রেশন বোনাস
+                  </h2>
+                </div>
+
+              </div>
+
+              <div className="relative mt-4 rounded-2xl border border-white/15 bg-white/10 px-4 py-3 text-center">
+
+                <p className="text-[9px] font-bold text-green-100">
+                  আপনি পাবেন
+                </p>
+
+                <p className="mt-0.5 text-[30px] font-black leading-none">
+                  ৳৫০
+                </p>
+
+                <p className="mt-1 text-[8px] font-semibold text-green-100">
+                  রেজিস্ট্রেশন সম্পন্ন করার জন্য
+                </p>
+
+              </div>
+
+            </div>
+
+            <div className="p-4">
+
+              <div className="space-y-2">
+
+                <div className="flex items-center justify-between rounded-2xl bg-slate-50 px-3.5 py-3">
+
+                  <div className="flex items-center gap-2.5">
+                    <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-green-100 text-sm">
+                      🎁
+                    </span>
+
+                    <span className="text-[10px] font-bold text-slate-600">
+                      রেজিস্ট্রেশন বোনাস
+                    </span>
+                  </div>
+
+                  <span className="text-xs font-black text-green-600">
+                    ৳৫০
+                  </span>
+
+                </div>
+
+                <div className="flex items-center justify-between rounded-2xl bg-slate-50 px-3.5 py-3">
+
+                  <div className="flex items-center gap-2.5">
+                    <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-blue-100 text-sm">
+                      💳
+                    </span>
+
+                    <span className="text-[10px] font-bold text-slate-600">
+                      সর্বনিম্ন ডিপোজিট
+                    </span>
+                  </div>
+
+                  <span className="text-xs font-black text-slate-800">
+                    ৳৫০০
+                  </span>
+
+                </div>
+
+                <div className="flex items-center justify-between rounded-2xl bg-slate-50 px-3.5 py-3">
+
+                  <div className="flex items-center gap-2.5">
+                    <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-purple-100 text-sm">
+                      💰
+                    </span>
+
+                    <span className="text-[10px] font-bold text-slate-600">
+                      সর্বনিম্ন উত্তোলন
+                    </span>
+                  </div>
+
+                  <span className="text-xs font-black text-slate-800">
+                    ৳২০০
+                  </span>
+
+                </div>
+
+                <div className="flex items-center justify-between rounded-2xl bg-slate-50 px-3.5 py-3">
+
+                  <div className="flex items-center gap-2.5">
+                    <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-orange-100 text-sm">
+                      📉
+                    </span>
+
+                    <span className="text-[10px] font-bold text-slate-600">
+                      উত্তোলন কমিশন
+                    </span>
+                  </div>
+
+                  <span className="text-xs font-black text-orange-600">
+                    ১০%
+                  </span>
+
+                </div>
+
+              </div>
+
+              <button
+                type="button"
+                onClick={closeFirstPopup}
+                className="mt-4 flex w-full items-center justify-center rounded-xl bg-green-600 px-4 py-3 text-[11px] font-black text-white shadow-lg shadow-green-600/20 transition hover:bg-green-700 active:scale-[0.98]"
+              >
+                বুঝেছি
+                <span className="ml-1.5">
+                  →
+                </span>
+              </button>
+
+            </div>
+
+          </div>
+
+        </div>
+      ) : null}
+
+      {/* =================================================
+          HOME POPUP 2 — TELEGRAM
+      ================================================= */}
+
+      {isLoggedIn &&
+      !checkingAuth &&
+      homePopup === 2 ? (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/45 px-4 backdrop-blur-[3px]">
+
+          <div className="w-full max-w-[340px] overflow-hidden rounded-[24px] border border-white/70 bg-white shadow-[0_24px_70px_rgba(15,23,42,0.25)]">
+
+            <div className="relative overflow-hidden bg-gradient-to-br from-sky-500 via-blue-600 to-indigo-600 px-5 py-6 text-white">
+
+              <div className="absolute -right-10 -top-10 h-32 w-32 rounded-full bg-white/10 blur-2xl" />
+
+              <div className="absolute -bottom-12 -left-8 h-28 w-28 rounded-full bg-cyan-300/10 blur-2xl" />
+
+              <div className="relative flex flex-col items-center text-center">
+
+                <div className="flex h-14 w-14 items-center justify-center rounded-[18px] bg-white/15 text-2xl shadow-inner">
+                  📢
+                </div>
+
+                <p className="mt-3 text-[9px] font-bold text-blue-100">
+                  গুরুত্বপূর্ণ আপডেট
+                </p>
+
+                <h2 className="mt-1 text-xl font-black">
+                  Telegram Channel
+                </h2>
+
+              </div>
+
+            </div>
+
+            <div className="p-5 text-center">
+
+              <p className="text-[11px] font-bold leading-5 text-slate-600">
+                সকল আপডেট ও সহযোগিতা পেতে আমাদের
+                Telegram Channel-এ যুক্ত থাকুন।
+              </p>
+
+              <div className="mt-4 rounded-2xl border border-blue-100 bg-blue-50 px-3.5 py-3">
+
+                <div className="flex items-center justify-center gap-2">
+
+                  <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-white text-sm shadow-sm">
+                    📲
+                  </span>
+
+                  <span className="text-[10px] font-black text-blue-700">
+                    সকল আপডেট এখানে পাবেন
+                  </span>
+
+                </div>
+
+              </div>
+
+              <div className="mt-4 flex gap-2">
+
+                <button
+                  type="button"
+                  onClick={closeSecondPopup}
+                  className="flex-1 rounded-xl border border-slate-200 bg-white px-3 py-3 text-[10px] font-black text-slate-600 transition hover:bg-slate-50 active:scale-[0.98]"
+                >
+                  পরে
+                </button>
+
+                {telegramLink ? (
+                  <a
+                    href={telegramLink}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    onClick={closeSecondPopup}
+                    className="flex flex-[1.5] items-center justify-center rounded-xl bg-blue-600 px-3 py-3 text-[10px] font-black text-white shadow-lg shadow-blue-600/20 transition hover:bg-blue-700 active:scale-[0.98]"
+                  >
+                    Join Channel
+                    <span className="ml-1.5 text-sm">
+                      →
+                    </span>
+                  </a>
+                ) : (
+                  <button
+                    type="button"
+                    disabled
+                    className="flex flex-[1.5] items-center justify-center rounded-xl bg-slate-200 px-3 py-3 text-[10px] font-black text-slate-400"
+                  >
+                    {loadingTelegram
+                      ? "লিংক লোড হচ্ছে..."
+                      : "লিংক পাওয়া যায়নি"}
+                  </button>
+                )}
+
+              </div>
+
+            </div>
+
+          </div>
+
+        </div>
+      ) : null}
+
+      {/* =================================================
+          HEADER
+      ================================================= */}
 
       <header className="sticky top-0 z-50 border-b border-slate-200/70 bg-white/90 backdrop-blur-2xl">
+
         <div className="mx-auto flex max-w-6xl items-center justify-between px-4 py-3 sm:px-6">
 
           <Link
             href="/"
             className="flex items-center gap-3"
           >
+
             <div className="relative flex h-10 w-10 items-center justify-center overflow-hidden rounded-[14px] bg-slate-950 shadow-lg">
 
               <div className="absolute -right-2 -top-2 h-7 w-7 rounded-full bg-green-400/30 blur-md" />
@@ -572,6 +1047,7 @@ export default function Home() {
             </div>
 
             <div>
+
               <h1 className="text-[16px] font-black tracking-tight">
                 পকেট মানি
               </h1>
@@ -579,7 +1055,9 @@ export default function Home() {
               <p className="text-[10px] font-semibold text-slate-400">
                 কাজ করুন • পুরস্কার নিন
               </p>
+
             </div>
+
           </Link>
 
           {checkingAuth ? (
@@ -601,11 +1079,14 @@ export default function Home() {
           )}
 
         </div>
+
       </header>
 
       <div className="mx-auto max-w-6xl px-4 sm:px-6">
 
-        {/* TOP ACTIONS */}
+        {/* =================================================
+            TOP ACTIONS
+        ================================================= */}
 
         <section className="mt-4 grid grid-cols-3 gap-2 sm:gap-3">
 
@@ -621,6 +1102,7 @@ export default function Home() {
             </span>
 
             <div className="text-left">
+
               <p className="text-[9px] font-bold text-slate-400">
                 টাকা যোগ
               </p>
@@ -628,6 +1110,7 @@ export default function Home() {
               <p className="mt-0.5 text-[11px] font-black text-slate-800 sm:text-xs">
                 ডিপোজিট
               </p>
+
             </div>
 
           </button>
@@ -642,6 +1125,7 @@ export default function Home() {
             </span>
 
             <div className="text-left">
+
               <p className="text-[9px] font-bold text-slate-400">
                 টাকা বের করুন
               </p>
@@ -649,6 +1133,7 @@ export default function Home() {
               <p className="mt-0.5 text-[11px] font-black text-slate-800 sm:text-xs">
                 উত্তোলন
               </p>
+
             </div>
 
           </Link>
@@ -663,6 +1148,7 @@ export default function Home() {
             </span>
 
             <div className="text-left">
+
               <p className="text-[9px] font-bold text-slate-400">
                 আপনার টাকা
               </p>
@@ -670,13 +1156,16 @@ export default function Home() {
               <p className="mt-0.5 text-[11px] font-black text-slate-800 sm:text-xs">
                 ব্যালেন্স
               </p>
+
             </div>
 
           </Link>
 
         </section>
 
-        {/* DEPOSIT BONUS */}
+        {/* =================================================
+            DEPOSIT BONUS
+        ================================================= */}
 
         <section className="relative mt-4 overflow-hidden rounded-[24px] bg-slate-950 shadow-[0_14px_40px_rgba(15,23,42,0.10)]">
 
@@ -786,9 +1275,12 @@ export default function Home() {
             </div>
 
           </div>
+
         </section>
 
-        {/* REFERRAL */}
+        {/* =================================================
+            REFERRAL
+        ================================================= */}
 
         <section className="mt-4 overflow-hidden rounded-[24px] border border-green-100 bg-white shadow-sm">
 
@@ -909,9 +1401,12 @@ export default function Home() {
             </button>
 
           </div>
+
         </section>
 
-        {/* PACKAGES */}
+        {/* =================================================
+            PACKAGES
+        ================================================= */}
 
         <section className="mt-7">
 
@@ -942,8 +1437,6 @@ export default function Home() {
 
           </div>
 
-          {/* DATABASE PACKAGE LOADING */}
-
           {loadingPackages ? (
             <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
 
@@ -954,13 +1447,17 @@ export default function Home() {
                   key={index}
                   className="overflow-hidden rounded-[23px] border border-slate-200/80 bg-white shadow-sm"
                 >
+
                   <div className="h-[154px] animate-pulse bg-slate-100" />
 
                   <div className="p-3.5">
+
                     <div className="h-[76px] animate-pulse rounded-2xl bg-slate-100" />
 
                     <div className="mt-3 h-10 animate-pulse rounded-xl bg-slate-100" />
+
                   </div>
+
                 </div>
               ))}
 
@@ -1018,7 +1515,9 @@ export default function Home() {
 
         </section>
 
-        {/* HOW IT WORKS */}
+        {/* =================================================
+            HOW IT WORKS
+        ================================================= */}
 
         <section className="mt-7 rounded-[24px] border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
 
@@ -1054,7 +1553,9 @@ export default function Home() {
 
         </section>
 
-        {/* NOTICE */}
+        {/* =================================================
+            NOTICE
+        ================================================= */}
 
         <section className="mt-4 rounded-2xl border border-green-100 bg-green-50/80 p-3.5">
 
@@ -1085,7 +1586,9 @@ export default function Home() {
 
       </div>
 
-      {/* BOTTOM NAV */}
+      {/* =================================================
+          BOTTOM NAV
+      ================================================= */}
 
       <nav className="fixed bottom-0 left-0 right-0 z-50 border-t border-slate-200/80 bg-white/90 backdrop-blur-2xl">
 
