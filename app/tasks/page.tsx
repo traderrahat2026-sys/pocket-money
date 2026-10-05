@@ -33,12 +33,6 @@ type Task = {
   expires_at: string;
   remaining_seconds: number;
   submission_status: SubmissionStatus;
-
-  /*
-   * IMPORTANT:
-   * This now comes from the GLOBAL
-   * task cycle RPC.
-   */
   cycle_started_at: string;
 };
 
@@ -386,6 +380,45 @@ export default function TasksPage() {
   useEffect(() => {
     loadTasks(true);
   }, [loadTasks]);
+
+  /*
+   * ============================================================
+   * LOCK BODY SCROLL WHILE UPLOAD MODAL IS OPEN
+   *
+   * IMPORTANT FOR MOBILE
+   *
+   * This prevents the page behind the modal from scrolling and
+   * sending the modal/buttons outside the visible viewport.
+   * ============================================================
+   */
+
+  useEffect(() => {
+    if (!showUploadModal) {
+      document.body.style.overflow = "";
+      document.body.style.touchAction = "";
+      return;
+    }
+
+    const previousOverflow =
+      document.body.style.overflow;
+
+    const previousTouchAction =
+      document.body.style.touchAction;
+
+    document.body.style.overflow =
+      "hidden";
+
+    document.body.style.touchAction =
+      "none";
+
+    return () => {
+      document.body.style.overflow =
+        previousOverflow;
+
+      document.body.style.touchAction =
+        previousTouchAction;
+    };
+  }, [showUploadModal]);
 
   /*
    * ============================================================
@@ -878,6 +911,10 @@ export default function TasksPage() {
       setSelectedFile(
         null
       );
+
+      setErrorMessage(
+        null
+      );
     };
 
   /*
@@ -1263,11 +1300,12 @@ export default function TasksPage() {
           </div>
         )}
 
-        {errorMessage && (
-          <div className="mb-4 rounded-2xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-300">
-            {errorMessage}
-          </div>
-        )}
+        {errorMessage &&
+          !showUploadModal && (
+            <div className="mb-4 rounded-2xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-300">
+              {errorMessage}
+            </div>
+          )}
 
         {/* ================================================== */}
         {/* SUMMARY */}
@@ -1675,154 +1713,260 @@ export default function TasksPage() {
       </main>
 
       {/* ====================================================== */}
-      {/* UPLOAD MODAL */}
+      {/* UPLOAD MODAL - MOBILE FIXED */}
       {/* ====================================================== */}
 
       {showUploadModal &&
         selectedTask && (
-          <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/70 p-0 sm:items-center sm:p-4">
-            <div className="max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-t-3xl border border-slate-800 bg-slate-900 p-5 sm:rounded-3xl">
-              <div className="flex items-start justify-between gap-4">
-                <div>
-                  <h2 className="text-xl font-bold">
-                    প্রুফ আপলোড করুন
-                  </h2>
+          <div
+            className="fixed inset-0 z-[100] flex items-end justify-center bg-black/70 px-0 pt-4 pb-0 sm:items-center sm:p-4"
+            onClick={(event) => {
+              /*
+               * Do not close modal by clicking overlay.
+               *
+               * This is especially important on mobile because
+               * accidental touches should not close the upload form.
+               */
+              if (
+                event.target ===
+                event.currentTarget
+              ) {
+                return;
+              }
+            }}
+          >
+            <div
+              className="
+                flex
+                w-full
+                max-w-lg
+                flex-col
+                overflow-hidden
+                rounded-t-3xl
+                border
+                border-slate-800
+                bg-slate-900
+                shadow-2xl
+                sm:max-h-[90dvh]
+                sm:rounded-3xl
+              "
+              style={{
+                maxHeight:
+                  "calc(100dvh - 12px)",
+              }}
+            >
+              {/* ================================================= */}
+              {/* MODAL HEADER */}
+              {/* ================================================= */}
 
-                  <p className="mt-1 text-sm text-slate-400">
-                    {
-                      selectedTask.title
+              <div className="shrink-0 border-b border-slate-800 bg-slate-900 px-5 py-4">
+                <div className="flex items-start justify-between gap-4">
+                  <div className="min-w-0">
+                    <h2 className="text-xl font-bold">
+                      প্রুফ আপলোড করুন
+                    </h2>
+
+                    <p className="mt-1 truncate text-sm text-slate-400">
+                      {
+                        selectedTask.title
+                      }
+                    </p>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={
+                      closeUploadModal
                     }
-                  </p>
-                </div>
-
-                <button
-                  type="button"
-                  onClick={
-                    closeUploadModal
-                  }
-                  disabled={
-                    uploading
-                  }
-                  className="flex h-9 w-9 items-center justify-center rounded-full bg-slate-800 text-slate-300 transition hover:bg-slate-700 disabled:opacity-50"
-                >
-                  ✕
-                </button>
-              </div>
-
-              <div className="mt-5 rounded-2xl border border-slate-800 bg-slate-950/60 p-4">
-                <div className="flex items-center justify-between">
-                  <span className="text-sm text-slate-400">
-                    Reward
-                  </span>
-
-                  <span className="font-bold text-emerald-400">
-                    ৳
-                    {formatMoney(
-                      selectedTask.reward_amount
-                    )}
-                  </span>
-                </div>
-
-                <div className="mt-3 flex items-center justify-between">
-                  <span className="text-sm text-slate-400">
-                    Package
-                  </span>
-
-                  <span className="font-semibold">
-                    ৳
-                    {formatMoney(
-                      selectedTask.package_amount
-                    )}
-                  </span>
+                    disabled={
+                      uploading
+                    }
+                    className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-slate-800 text-slate-300 transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
+                    aria-label="বন্ধ করুন"
+                  >
+                    ✕
+                  </button>
                 </div>
               </div>
 
-              {selectedTask.screenshot_required && (
-                <div className="mt-5">
-                  <label className="mb-2 block text-sm font-semibold text-slate-200">
-                    Screenshot
-                  </label>
+              {/* ================================================= */}
+              {/* MODAL SCROLLABLE CONTENT */}
+              {/* ================================================= */}
 
-                  <label className="flex cursor-pointer flex-col items-center justify-center rounded-2xl border border-dashed border-slate-700 bg-slate-950/60 px-5 py-8 text-center transition hover:border-emerald-500/50 hover:bg-slate-950">
-                    <div className="text-3xl">
-                      📷
-                    </div>
+              <div
+                className="
+                  min-h-0
+                  flex-1
+                  overflow-y-auto
+                  overscroll-contain
+                  px-5
+                  py-5
+                "
+                style={{
+                  WebkitOverflowScrolling:
+                    "touch",
+                }}
+              >
+                {/* =============================================== */}
+                {/* REWARD / PACKAGE */}
+                {/* =============================================== */}
 
-                    <p className="mt-2 text-sm font-semibold">
-                      Screenshot নির্বাচন করুন
-                    </p>
+                <div className="rounded-2xl border border-slate-800 bg-slate-950/60 p-4">
+                  <div className="flex items-center justify-between gap-4">
+                    <span className="text-sm text-slate-400">
+                      Reward
+                    </span>
 
-                    <p className="mt-1 text-xs text-slate-500">
-                      JPG, PNG অথবা WebP
-                    </p>
+                    <span className="font-bold text-emerald-400">
+                      ৳
+                      {formatMoney(
+                        selectedTask.reward_amount
+                      )}
+                    </span>
+                  </div>
 
-                    {selectedFile && (
-                      <p className="mt-3 max-w-full truncate text-xs text-emerald-400">
-                        {
-                          selectedFile.name
-                        }
+                  <div className="mt-3 flex items-center justify-between gap-4">
+                    <span className="text-sm text-slate-400">
+                      Package
+                    </span>
+
+                    <span className="font-semibold">
+                      ৳
+                      {formatMoney(
+                        selectedTask.package_amount
+                      )}
+                    </span>
+                  </div>
+                </div>
+
+                {/* =============================================== */}
+                {/* SCREENSHOT REQUIRED */}
+                {/* =============================================== */}
+
+                {selectedTask.screenshot_required && (
+                  <div className="mt-5">
+                    <label className="mb-2 block text-sm font-semibold text-slate-200">
+                      Screenshot
+                    </label>
+
+                    <label className="flex min-h-[180px] cursor-pointer flex-col items-center justify-center rounded-2xl border border-dashed border-slate-700 bg-slate-950/60 px-5 py-7 text-center transition hover:border-emerald-500/50 hover:bg-slate-950 active:bg-slate-950">
+                      <div className="text-3xl">
+                        📷
+                      </div>
+
+                      <p className="mt-2 text-sm font-semibold">
+                        Screenshot নির্বাচন করুন
                       </p>
-                    )}
 
-                    <input
-                      type="file"
-                      accept="image/*"
-                      onChange={
-                        handleFileChange
-                      }
-                      className="hidden"
-                      disabled={
-                        uploading
-                      }
-                    />
-                  </label>
+                      <p className="mt-1 text-xs text-slate-500">
+                        JPG, PNG অথবা WebP
+                      </p>
+
+                      {selectedFile && (
+                        <div className="mt-3 w-full rounded-xl border border-emerald-500/20 bg-emerald-500/10 px-3 py-2">
+                          <p className="truncate text-xs font-semibold text-emerald-400">
+                            {selectedFile.name}
+                          </p>
+
+                          <p className="mt-1 text-[11px] text-slate-500">
+                            Screenshot নির্বাচন করা হয়েছে
+                          </p>
+                        </div>
+                      )}
+
+                      <input
+                        type="file"
+                        accept="image/*"
+                        onChange={
+                          handleFileChange
+                        }
+                        className="hidden"
+                        disabled={
+                          uploading
+                        }
+                      />
+                    </label>
+                  </div>
+                )}
+
+                {/* =============================================== */}
+                {/* NO SCREENSHOT */}
+                {/* =============================================== */}
+
+                {!selectedTask.screenshot_required && (
+                  <div className="mt-5 rounded-2xl border border-slate-800 bg-slate-950/60 p-4 text-sm text-slate-400">
+                    এই কাজের জন্য Screenshot প্রয়োজন নেই।
+                  </div>
+                )}
+
+                {/* =============================================== */}
+                {/* ERROR */}
+                {/* =============================================== */}
+
+                {errorMessage && (
+                  <div className="mt-4 rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm leading-6 text-red-300">
+                    {
+                      errorMessage
+                    }
+                  </div>
+                )}
+
+                {/* Extra bottom spacing so content never touches
+                    the fixed/sticky action area. */}
+                <div className="h-2" />
+              </div>
+
+              {/* ================================================= */}
+              {/* FIXED/STICKY ACTION AREA */}
+              {/* ================================================= */}
+
+              <div
+                className="
+                  shrink-0
+                  border-t
+                  border-slate-800
+                  bg-slate-900
+                  px-5
+                  pt-3
+                "
+                style={{
+                  paddingBottom:
+                    "max(12px, env(safe-area-inset-bottom))",
+                }}
+              >
+                <div className="grid grid-cols-2 gap-3">
+                  {/* CANCEL */}
+                  <button
+                    type="button"
+                    onClick={
+                      closeUploadModal
+                    }
+                    disabled={
+                      uploading
+                    }
+                    className="min-h-[48px] rounded-xl border border-slate-700 bg-slate-800 px-4 py-3 text-sm font-bold text-white transition hover:bg-slate-700 active:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    বাতিল
+                  </button>
+
+                  {/* SUBMIT */}
+                  <button
+                    type="button"
+                    onClick={
+                      handleSubmit
+                    }
+                    disabled={
+                      uploading ||
+                      (selectedTask.screenshot_required &&
+                        !selectedFile)
+                    }
+                    className="min-h-[48px] rounded-xl bg-emerald-500 px-4 py-3 text-sm font-bold text-slate-950 transition hover:bg-emerald-400 active:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {uploading
+                      ? "জমা হচ্ছে..."
+                      : "Submit"}
+                  </button>
                 </div>
-              )}
-
-              {!selectedTask.screenshot_required && (
-                <div className="mt-5 rounded-2xl border border-slate-800 bg-slate-950/60 p-4 text-sm text-slate-400">
-                  এই কাজের জন্য Screenshot প্রয়োজন নেই।
-                </div>
-              )}
-
-              {errorMessage && (
-                <div className="mt-4 rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-300">
-                  {
-                    errorMessage
-                  }
-                </div>
-              )}
-
-              <div className="mt-5 grid grid-cols-2 gap-3">
-                <button
-                  type="button"
-                  onClick={
-                    closeUploadModal
-                  }
-                  disabled={
-                    uploading
-                  }
-                  className="rounded-xl border border-slate-700 bg-slate-800 px-4 py-3 text-sm font-bold text-white transition hover:bg-slate-700 disabled:opacity-50"
-                >
-                  বাতিল
-                </button>
-
-                <button
-                  type="button"
-                  onClick={
-                    handleSubmit
-                  }
-                  disabled={
-                    uploading ||
-                    (selectedTask.screenshot_required &&
-                      !selectedFile)
-                  }
-                  className="rounded-xl bg-emerald-500 px-4 py-3 text-sm font-bold text-slate-950 transition hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  {uploading
-                    ? "জমা হচ্ছে..."
-                    : "Submit"}
-                </button>
               </div>
             </div>
           </div>
