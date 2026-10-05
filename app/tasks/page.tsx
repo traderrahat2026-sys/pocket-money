@@ -86,10 +86,6 @@ export default function TasksPage() {
   const [errorMessage, setErrorMessage] =
     useState<string | null>(null);
 
-  /*
-   * Prevent multiple cycle reloads
-   * at the exact same time.
-   */
   const cycleRefreshLock =
     useRef(false);
 
@@ -271,9 +267,6 @@ export default function TasksPage() {
                     ? task.submission_status
                     : null,
 
-                /*
-                 * GLOBAL CYCLE
-                 */
                 cycle_started_at:
                   cycleStartedAt,
               };
@@ -384,11 +377,6 @@ export default function TasksPage() {
   /*
    * ============================================================
    * LOCK BODY SCROLL WHILE UPLOAD MODAL IS OPEN
-   *
-   * IMPORTANT FOR MOBILE
-   *
-   * This prevents the page behind the modal from scrolling and
-   * sending the modal/buttons outside the visible viewport.
    * ============================================================
    */
 
@@ -423,13 +411,6 @@ export default function TasksPage() {
   /*
    * ============================================================
    * GET CURRENT GLOBAL CYCLE START
-   *
-   * IMPORTANT:
-   *
-   * NEVER calculate this from task.created_at.
-   *
-   * The RPC already gives us the synchronized
-   * global cycle_started_at.
    * ============================================================
    */
 
@@ -470,10 +451,6 @@ export default function TasksPage() {
           return null;
         }
 
-        /*
-         * Prefer actual submission history.
-         */
-
         const currentCycleSubmission =
           submissions.find(
             (submission) => {
@@ -495,9 +472,6 @@ export default function TasksPage() {
                   submission.cycle_started_at
                 ).getTime();
 
-              /*
-               * Exact global cycle match.
-               */
               return (
                 submissionCycle ===
                 currentCycleStart
@@ -510,15 +484,6 @@ export default function TasksPage() {
         ) {
           return currentCycleSubmission;
         }
-
-        /*
-         * ======================================================
-         * RPC STATUS FALLBACK
-         *
-         * This is important immediately after submission
-         * before the complete history finishes updating.
-         * ======================================================
-         */
 
         if (
           task.submission_status ===
@@ -566,10 +531,6 @@ export default function TasksPage() {
   /*
    * ============================================================
    * LIVE COUNTDOWN
-   *
-   * Countdown is based ONLY on expires_at returned by RPC.
-   *
-   * Submission time does NOT affect it.
    * ============================================================
    */
 
@@ -622,14 +583,6 @@ export default function TasksPage() {
             )
         );
 
-        /*
-         * When the global cycle ends,
-         * reload DB state.
-         *
-         * This gives the same task a new
-         * global cycle.
-         */
-
         if (
           cycleEnded &&
           !cycleRefreshLock.current
@@ -658,14 +611,6 @@ export default function TasksPage() {
   /*
    * ============================================================
    * ADMIN GLOBAL REFRESH DETECTION
-   *
-   * If Admin presses "সময় Refresh" while the user is already
-   * sitting on this page, the User panel should update too.
-   *
-   * We periodically call get_my_tasks().
-   *
-   * 10 seconds is used so the user panel catches an Admin
-   * refresh quickly without continuously hammering Supabase.
    * ============================================================
    */
 
@@ -816,11 +761,6 @@ export default function TasksPage() {
           task
         );
 
-      /*
-       * Any submission in the current
-       * global cycle blocks another submission.
-       */
-
       if (submission) {
         setMessage(
           "এই ২৪ ঘণ্টার সাইকেলে এই কাজটি ইতিমধ্যে জমা দেওয়া হয়েছে। পরবর্তী সাইকেলে আবার জমা দিতে পারবেন।"
@@ -846,7 +786,7 @@ export default function TasksPage() {
 
   /*
    * ============================================================
-   * OPEN SUBMISSION MODAL
+   * OPEN SUBMISSION POPUP
    * ============================================================
    */
 
@@ -861,11 +801,6 @@ export default function TasksPage() {
         getSubmission(
           task
         );
-
-      /*
-       * Pending / Approved / Rejected
-       * সব current cycle-এ block করবে।
-       */
 
       if (submission) {
         setMessage(
@@ -890,7 +825,7 @@ export default function TasksPage() {
 
   /*
    * ============================================================
-   * CLOSE MODAL
+   * CLOSE POPUP
    * ============================================================
    */
 
@@ -931,6 +866,56 @@ export default function TasksPage() {
         event.target.files?.[0] ??
         null;
 
+      if (!file) {
+        setSelectedFile(
+          null
+        );
+        return;
+      }
+
+      /*
+       * Basic image validation
+       */
+
+      if (
+        !file.type.startsWith(
+          "image/"
+        )
+      ) {
+        setSelectedFile(
+          null
+        );
+
+        setErrorMessage(
+          "শুধু Image Screenshot নির্বাচন করুন।"
+        );
+
+        event.target.value = "";
+        return;
+      }
+
+      /*
+       * 10MB maximum
+       */
+
+      if (
+        file.size >
+        10 *
+          1024 *
+          1024
+      ) {
+        setSelectedFile(
+          null
+        );
+
+        setErrorMessage(
+          "Screenshot-এর size সর্বোচ্চ 10MB হতে পারবে।"
+        );
+
+        event.target.value = "";
+        return;
+      }
+
       setSelectedFile(
         file
       );
@@ -952,12 +937,16 @@ export default function TasksPage() {
         return;
       }
 
+      if (uploading) {
+        return;
+      }
+
       setMessage(null);
       setErrorMessage(null);
 
       /*
        * ======================================================
-       * CLIENT-SIDE CURRENT GLOBAL CYCLE CHECK
+       * CURRENT GLOBAL CYCLE CHECK
        * ======================================================
        */
 
@@ -1015,6 +1004,14 @@ export default function TasksPage() {
           userError ||
           !user
         ) {
+          setErrorMessage(
+            "আপনার Login session পাওয়া যায়নি। আবার Login করুন।"
+          );
+
+          setUploading(
+            false
+          );
+
           router.push(
             "/login"
           );
@@ -1040,36 +1037,84 @@ export default function TasksPage() {
               ?.toLowerCase() ||
             "jpg";
 
+          const safeExtension =
+            [
+              "jpg",
+              "jpeg",
+              "png",
+              "webp",
+            ].includes(
+              extension
+            )
+              ? extension
+              : "jpg";
+
           const fileName =
-            `${user.id}/${selectedTask.id}/${Date.now()}.${extension}`;
+            `${user.id}/${selectedTask.id}/${Date.now()}.${safeExtension}`;
 
-          const {
-            error:
-              uploadError,
-          } =
-            await supabase.storage
-              .from(
-                "task-screenshots"
-              )
-              .upload(
-                fileName,
-                selectedFile,
-                {
-                  cacheControl:
-                    "3600",
+          try {
+            const {
+              error:
+                uploadError,
+            } =
+              await supabase.storage
+                .from(
+                  "task-screenshots"
+                )
+                .upload(
+                  fileName,
+                  selectedFile,
+                  {
+                    cacheControl:
+                      "3600",
 
-                  upsert:
-                    false,
-                }
+                    upsert:
+                      false,
+
+                    contentType:
+                      selectedFile.type ||
+                      "image/jpeg",
+                  }
+                );
+
+            if (
+              uploadError
+            ) {
+              console.error(
+                "SCREENSHOT UPLOAD ERROR:",
+                uploadError
               );
 
-          if (uploadError) {
+              throw uploadError;
+            }
+          } catch (
+            storageError: any
+          ) {
             console.error(
-              "SCREENSHOT UPLOAD ERROR:",
-              uploadError
+              "STORAGE FETCH ERROR:",
+              storageError
             );
 
-            throw uploadError;
+            const storageMessage =
+              storageError?.message ||
+              "";
+
+            if (
+              storageMessage
+                .toLowerCase()
+                .includes(
+                  "failed to fetch"
+                )
+            ) {
+              throw new Error(
+                "Screenshot upload করা যাচ্ছে না। Supabase Storage connection বা task-screenshots bucket-এর permission সমস্যা হয়েছে।"
+              );
+            }
+
+            throw new Error(
+              storageMessage ||
+                "Screenshot upload করতে সমস্যা হয়েছে।"
+            );
           }
 
           const {
@@ -1088,42 +1133,81 @@ export default function TasksPage() {
             publicUrlData
               ?.publicUrl ??
             null;
+
+          if (
+            !screenshotUrl
+          ) {
+            throw new Error(
+              "Screenshot-এর URL পাওয়া যায়নি।"
+            );
+          }
         }
 
         /*
          * ====================================================
          * DATABASE SUBMISSION
-         *
-         * The RPC itself calculates the current global cycle.
-         *
-         * Client does NOT send cycle_started_at.
          * ====================================================
          */
 
-        const {
-          data:
-            submissionId,
-          error:
-            submitError,
-        } =
-          await supabase.rpc(
-            "submit_package_task",
-            {
-              p_task_id:
-                selectedTask.id,
+        let submissionId:
+          | string
+          | null = null;
 
-              p_screenshot_url:
-                screenshotUrl,
-            }
-          );
+        try {
+          const {
+            data,
+            error:
+              submitError,
+          } =
+            await supabase.rpc(
+              "submit_package_task",
+              {
+                p_task_id:
+                  selectedTask.id,
 
-        if (submitError) {
-          console.error(
-            "SUBMIT TASK ERROR:",
+                p_screenshot_url:
+                  screenshotUrl,
+              }
+            );
+
+          if (
             submitError
+          ) {
+            console.error(
+              "SUBMIT TASK ERROR:",
+              submitError
+            );
+
+            throw submitError;
+          }
+
+          submissionId =
+            data;
+        } catch (
+          rpcError: any
+        ) {
+          console.error(
+            "RPC FETCH ERROR:",
+            rpcError
           );
 
-          throw submitError;
+          const rpcMessage =
+            rpcError?.message ||
+            "";
+
+          if (
+            rpcMessage
+              .toLowerCase()
+              .includes(
+                "failed to fetch"
+              )
+          ) {
+            throw new Error(
+              "কাজ Submit করা যাচ্ছে না। Supabase connection বা submit_package_task RPC-তে সমস্যা হয়েছে।"
+            );
+          }
+
+          throw rpcError;
         }
 
         if (!submissionId) {
@@ -1134,7 +1218,7 @@ export default function TasksPage() {
 
         /*
          * ====================================================
-         * CLOSE MODAL
+         * CLOSE POPUP
          * ====================================================
          */
 
@@ -1171,7 +1255,10 @@ export default function TasksPage() {
 
         const errorText =
           error?.message ||
-          "কাজ জমা দিতে সমস্যা হয়েছে।";
+          "";
+
+        const normalizedError =
+          errorText.toLowerCase();
 
         /*
          * ====================================================
@@ -1180,7 +1267,7 @@ export default function TasksPage() {
          */
 
         if (
-          errorText.includes(
+          normalizedError.includes(
             "already submitted"
           )
         ) {
@@ -1188,24 +1275,47 @@ export default function TasksPage() {
             "এই ২৪ ঘণ্টার সাইকেলে এই কাজটি ইতিমধ্যে জমা দেওয়া হয়েছে।"
           );
         } else if (
-          errorText.includes(
-            "Screenshot is required"
+          normalizedError.includes(
+            "screenshot is required"
           )
         ) {
           setErrorMessage(
             "এই কাজের জন্য Screenshot প্রয়োজন।"
           );
         } else if (
-          errorText.includes(
+          normalizedError.includes(
             "not eligible"
           )
         ) {
           setErrorMessage(
             "এই কাজের জন্য আপনার কোনো Active Package নেই।"
           );
+        } else if (
+          normalizedError.includes(
+            "failed to fetch"
+          )
+        ) {
+          setErrorMessage(
+            "Server-এর সাথে সংযোগ করা যাচ্ছে না। Screenshot upload বা Supabase connection পরীক্ষা করুন।"
+          );
+        } else if (
+          normalizedError.includes(
+            "row-level security"
+          ) ||
+          normalizedError.includes(
+            "permission denied"
+          ) ||
+          normalizedError.includes(
+            "new row violates"
+          )
+        ) {
+          setErrorMessage(
+            "Permission সমস্যার কারণে Submit করা যাচ্ছে না। Supabase policy/RLS পরীক্ষা করতে হবে।"
+          );
         } else {
           setErrorMessage(
-            errorText
+            errorText ||
+              "কাজ জমা দিতে সমস্যা হয়েছে।"
           );
         }
       } finally {
@@ -1259,6 +1369,7 @@ export default function TasksPage() {
       <Header />
 
       <main className="mx-auto w-full max-w-3xl px-4 pt-5">
+
         {/* ================================================== */}
         {/* HEADER */}
         {/* ================================================== */}
@@ -1713,60 +1824,35 @@ export default function TasksPage() {
       </main>
 
       {/* ====================================================== */}
-      {/* UPLOAD MODAL - MOBILE FIXED */}
+      {/* PROOF UPLOAD POPUP */}
       {/* ====================================================== */}
 
       {showUploadModal &&
         selectedTask && (
-          <div
-            className="fixed inset-0 z-[100] flex items-end justify-center bg-black/70 px-0 pt-4 pb-0 sm:items-center sm:p-4"
-            onClick={(event) => {
-              /*
-               * Do not close modal by clicking overlay.
-               *
-               * This is especially important on mobile because
-               * accidental touches should not close the upload form.
-               */
-              if (
-                event.target ===
-                event.currentTarget
-              ) {
-                return;
-              }
-            }}
-          >
+          <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/80 p-3 sm:p-5">
+
+            {/* Popup */}
             <div
-              className="
-                flex
-                w-full
-                max-w-lg
-                flex-col
-                overflow-hidden
-                rounded-t-3xl
-                border
-                border-slate-800
-                bg-slate-900
-                shadow-2xl
-                sm:max-h-[90dvh]
-                sm:rounded-3xl
-              "
+              className="flex w-full max-w-md flex-col overflow-hidden rounded-3xl border border-slate-700 bg-slate-900 shadow-2xl"
               style={{
                 maxHeight:
-                  "calc(100dvh - 12px)",
+                  "calc(100dvh - 24px)",
               }}
             >
+
               {/* ================================================= */}
-              {/* MODAL HEADER */}
+              {/* POPUP HEADER */}
               {/* ================================================= */}
 
-              <div className="shrink-0 border-b border-slate-800 bg-slate-900 px-5 py-4">
-                <div className="flex items-start justify-between gap-4">
+              <div className="shrink-0 border-b border-slate-800 px-4 py-4 sm:px-5">
+                <div className="flex items-center justify-between gap-3">
+
                   <div className="min-w-0">
-                    <h2 className="text-xl font-bold">
+                    <h2 className="text-lg font-bold sm:text-xl">
                       প্রুফ আপলোড করুন
                     </h2>
 
-                    <p className="mt-1 truncate text-sm text-slate-400">
+                    <p className="mt-1 truncate text-xs text-slate-400 sm:text-sm">
                       {
                         selectedTask.title
                       }
@@ -1781,38 +1867,31 @@ export default function TasksPage() {
                     disabled={
                       uploading
                     }
-                    className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-slate-800 text-slate-300 transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
+                    className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-slate-800 text-lg text-slate-300 transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
                     aria-label="বন্ধ করুন"
                   >
                     ✕
                   </button>
+
                 </div>
               </div>
 
               {/* ================================================= */}
-              {/* MODAL SCROLLABLE CONTENT */}
+              {/* POPUP CONTENT */}
               {/* ================================================= */}
 
               <div
-                className="
-                  min-h-0
-                  flex-1
-                  overflow-y-auto
-                  overscroll-contain
-                  px-5
-                  py-5
-                "
+                className="min-h-0 flex-1 overflow-y-auto px-4 py-4 sm:px-5 sm:py-5"
                 style={{
                   WebkitOverflowScrolling:
                     "touch",
                 }}
               >
-                {/* =============================================== */}
-                {/* REWARD / PACKAGE */}
-                {/* =============================================== */}
 
-                <div className="rounded-2xl border border-slate-800 bg-slate-950/60 p-4">
-                  <div className="flex items-center justify-between gap-4">
+                {/* REWARD */}
+
+                <div className="rounded-2xl border border-slate-800 bg-slate-950/70 p-4">
+                  <div className="flex items-center justify-between gap-3">
                     <span className="text-sm text-slate-400">
                       Reward
                     </span>
@@ -1825,12 +1904,12 @@ export default function TasksPage() {
                     </span>
                   </div>
 
-                  <div className="mt-3 flex items-center justify-between gap-4">
+                  <div className="mt-3 flex items-center justify-between gap-3">
                     <span className="text-sm text-slate-400">
                       Package
                     </span>
 
-                    <span className="font-semibold">
+                    <span className="font-semibold text-white">
                       ৳
                       {formatMoney(
                         selectedTask.package_amount
@@ -1839,23 +1918,25 @@ export default function TasksPage() {
                   </div>
                 </div>
 
-                {/* =============================================== */}
-                {/* SCREENSHOT REQUIRED */}
-                {/* =============================================== */}
+                {/* SCREENSHOT */}
 
                 {selectedTask.screenshot_required && (
-                  <div className="mt-5">
+                  <div className="mt-4">
+
                     <label className="mb-2 block text-sm font-semibold text-slate-200">
                       Screenshot
                     </label>
 
-                    <label className="flex min-h-[180px] cursor-pointer flex-col items-center justify-center rounded-2xl border border-dashed border-slate-700 bg-slate-950/60 px-5 py-7 text-center transition hover:border-emerald-500/50 hover:bg-slate-950 active:bg-slate-950">
+                    <label className="flex min-h-[145px] cursor-pointer flex-col items-center justify-center rounded-2xl border border-dashed border-slate-700 bg-slate-950/70 px-4 py-5 text-center transition hover:border-emerald-500/50">
+
                       <div className="text-3xl">
                         📷
                       </div>
 
-                      <p className="mt-2 text-sm font-semibold">
-                        Screenshot নির্বাচন করুন
+                      <p className="mt-2 text-sm font-semibold text-white">
+                        {selectedFile
+                          ? "Screenshot পরিবর্তন করুন"
+                          : "Screenshot নির্বাচন করুন"}
                       </p>
 
                       <p className="mt-1 text-xs text-slate-500">
@@ -1865,7 +1946,9 @@ export default function TasksPage() {
                       {selectedFile && (
                         <div className="mt-3 w-full rounded-xl border border-emerald-500/20 bg-emerald-500/10 px-3 py-2">
                           <p className="truncate text-xs font-semibold text-emerald-400">
-                            {selectedFile.name}
+                            {
+                              selectedFile.name
+                            }
                           </p>
 
                           <p className="mt-1 text-[11px] text-slate-500">
@@ -1876,7 +1959,7 @@ export default function TasksPage() {
 
                       <input
                         type="file"
-                        accept="image/*"
+                        accept="image/jpeg,image/png,image/webp,image/*"
                         onChange={
                           handleFileChange
                         }
@@ -1885,57 +1968,46 @@ export default function TasksPage() {
                           uploading
                         }
                       />
+
                     </label>
                   </div>
                 )}
 
-                {/* =============================================== */}
                 {/* NO SCREENSHOT */}
-                {/* =============================================== */}
 
                 {!selectedTask.screenshot_required && (
-                  <div className="mt-5 rounded-2xl border border-slate-800 bg-slate-950/60 p-4 text-sm text-slate-400">
+                  <div className="mt-4 rounded-2xl border border-slate-800 bg-slate-950/70 p-4 text-sm text-slate-400">
                     এই কাজের জন্য Screenshot প্রয়োজন নেই।
                   </div>
                 )}
 
-                {/* =============================================== */}
                 {/* ERROR */}
-                {/* =============================================== */}
 
                 {errorMessage && (
                   <div className="mt-4 rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm leading-6 text-red-300">
-                    {
-                      errorMessage
-                    }
+                    {errorMessage}
                   </div>
                 )}
 
-                {/* Extra bottom spacing so content never touches
-                    the fixed/sticky action area. */}
                 <div className="h-2" />
               </div>
 
               {/* ================================================= */}
-              {/* FIXED/STICKY ACTION AREA */}
+              {/* POPUP ACTION BUTTONS */}
               {/* ================================================= */}
 
               <div
-                className="
-                  shrink-0
-                  border-t
-                  border-slate-800
-                  bg-slate-900
-                  px-5
-                  pt-3
-                "
+                className="shrink-0 border-t border-slate-800 bg-slate-900 px-4 pt-3 sm:px-5"
                 style={{
                   paddingBottom:
                     "max(12px, env(safe-area-inset-bottom))",
                 }}
               >
+
                 <div className="grid grid-cols-2 gap-3">
+
                   {/* CANCEL */}
+
                   <button
                     type="button"
                     onClick={
@@ -1944,12 +2016,13 @@ export default function TasksPage() {
                     disabled={
                       uploading
                     }
-                    className="min-h-[48px] rounded-xl border border-slate-700 bg-slate-800 px-4 py-3 text-sm font-bold text-white transition hover:bg-slate-700 active:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
+                    className="min-h-[50px] rounded-xl border border-slate-700 bg-slate-800 px-4 py-3 text-sm font-bold text-white transition hover:bg-slate-700 active:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     বাতিল
                   </button>
 
                   {/* SUBMIT */}
+
                   <button
                     type="button"
                     onClick={
@@ -1957,17 +2030,21 @@ export default function TasksPage() {
                     }
                     disabled={
                       uploading ||
-                      (selectedTask.screenshot_required &&
-                        !selectedFile)
+                      (
+                        selectedTask.screenshot_required &&
+                        !selectedFile
+                      )
                     }
-                    className="min-h-[48px] rounded-xl bg-emerald-500 px-4 py-3 text-sm font-bold text-slate-950 transition hover:bg-emerald-400 active:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-50"
+                    className="min-h-[50px] rounded-xl bg-emerald-500 px-4 py-3 text-sm font-bold text-slate-950 transition hover:bg-emerald-400 active:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     {uploading
                       ? "জমা হচ্ছে..."
                       : "Submit"}
                   </button>
+
                 </div>
               </div>
+
             </div>
           </div>
         )}
