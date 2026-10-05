@@ -15,11 +15,9 @@ type PackageData = {
 
 type Activation = {
   id: string;
-  package_amount: number;
+  package_amount: number | string;
   activated_at?: string | null;
-  active_from?: string | null;
   deactivated_at?: string | null;
-  expires_at?: string | null;
 };
 
 type PopupType =
@@ -48,29 +46,20 @@ export default function PackageCard({ pkg }: Props) {
   const [popup, setPopup] = useState<PopupState | null>(null);
 
   /*
-   * =====================================================
-   * MASTER PACKAGE DATA
-   * =====================================================
-   *
-   * এই values সরাসরি public.packages table থেকে আসবে।
-   *
-   * package_amount = Package Price
-   * daily_reward   = Daily Earning
-   * duration_days  = Package Duration
-   *
-   * এখানে কোনো static reward রাখা হয়নি।
+   * ==========================================================
+   * PACKAGE DATA
+   * ==========================================================
    */
 
   const amount = Number(pkg.package_amount || 0);
-
   const dailyEarning = Number(pkg.daily_reward || 0);
 
-  const durationDays = Number(pkg.duration_days || 30);
-
   /*
-   * Total earning সবসময় database-এর
-   * daily_reward × duration_days থেকে calculate হবে।
+   * IMPORTANT:
+   * Package duration comes from public.packages.
+   * Fallback is 90 days, NOT 30.
    */
+  const durationDays = Number(pkg.duration_days || 90);
 
   const totalEarning = dailyEarning * durationDays;
 
@@ -80,10 +69,11 @@ export default function PackageCard({ pkg }: Props) {
   const money = (value: number) =>
     `৳${Number(value || 0).toLocaleString("en-BD")}`;
 
+
   /*
-   * =====================================================
+   * ==========================================================
    * PACKAGE COLORS
-   * =====================================================
+   * ==========================================================
    */
 
   const getPackageVisual = () => {
@@ -198,10 +188,11 @@ export default function PackageCard({ pkg }: Props) {
 
   const visual = getPackageVisual();
 
+
   /*
-   * =====================================================
+   * ==========================================================
    * POPUP
-   * =====================================================
+   * ==========================================================
    */
 
   const closePopup = () => {
@@ -220,152 +211,359 @@ export default function PackageCard({ pkg }: Props) {
     });
   };
 
+
   /*
-   * =====================================================
-   * CHECK ACTIVE PACKAGE
-   * =====================================================
+   * ==========================================================
+   * NORMALIZE RPC DATA
+   * ==========================================================
    */
 
-  const checkActivePackage = useCallback(async () => {
-    try {
-      setIsChecking(true);
-
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
-
-      if (!user) {
-        setIsActivated(false);
-        setIsChecking(false);
-        return;
-      }
-
-      const { data, error } = await supabase.rpc(
-        "get_my_active_packages"
+  const normalizeActivations = (
+    data: unknown
+  ): Activation[] => {
+    if (Array.isArray(data)) {
+      return data.filter(
+        (item): item is Activation =>
+          !!item &&
+          typeof item === "object"
       );
+    }
 
-      if (error) {
+    if (
+      data &&
+      typeof data === "object"
+    ) {
+      return [data as Activation];
+    }
+
+    return [];
+  };
+
+
+  /*
+   * ==========================================================
+   * EXACT ACTIVE PACKAGE CHECK
+   *
+   * IMPORTANT:
+   * We only use:
+   *
+   * user_package_activations.package_amount
+   *
+   * to identify this package.
+   *
+   * We do NOT use expires_at because that column does
+   * not exist in the database.
+   * ==========================================================
+   */
+
+  const isActivationActive = (
+    activation: Activation
+  ): boolean => {
+    /*
+     * The RPC already returns only active packages.
+     *
+     * Still check deactivated_at on the client as an
+     * additional safety check.
+     */
+
+    if (
+      activation.deactivated_at
+    ) {
+      const deactivatedAt =
+        new Date(
+          activation.deactivated_at
+        ).getTime();
+
+      if (
+        Number.isFinite(deactivatedAt) &&
+        Date.now() >= deactivatedAt
+      ) {
+        return false;
+      }
+    }
+
+    return true;
+  };
+
+
+  /*
+   * ==========================================================
+   * LOAD ACTIVE STATUS FROM DATABASE
+   *
+   * This is the MOST IMPORTANT part.
+   *
+   * Every page refresh performs a fresh RPC request.
+   * React state is NOT used as the source of truth.
+   * ==========================================================
+   */
+
+  const checkActivePackage = useCallback(
+    async (showLoader = false) => {
+      try {
+        if (showLoader) {
+          setIsChecking(true);
+        }
+
+        /*
+         * ------------------------------------------------------
+         * Get current logged-in user
+         * ------------------------------------------------------
+         */
+
+        const {
+          data: { user },
+          error: userError,
+        } = await supabase.auth.getUser();
+
+        if (userError || !user) {
+          setIsActivated(false);
+          setIsChecking(false);
+          return;
+        }
+
+
+        /*
+         * ------------------------------------------------------
+         * Read active packages directly from Supabase RPC
+         * ------------------------------------------------------
+         */
+
+        const {
+          data,
+          error,
+        } = await supabase.rpc(
+          "get_my_active_packages"
+        );
+
+        if (error) {
+          console.error(
+            "ACTIVE PACKAGE RPC ERROR:",
+            error
+          );
+
+          /*
+           * Do not change an already-known active state
+           * because of a temporary request failure.
+           */
+
+          setIsChecking(false);
+          return;
+        }
+
+
+        /*
+         * ------------------------------------------------------
+         * Normalize response
+         * ------------------------------------------------------
+         */
+
+        const activations =
+          normalizeActivations(data);
+
+
+        /*
+         * ------------------------------------------------------
+         * FIND EXACT PACKAGE
+         *
+         * Example:
+         *
+         * Current card = 1500
+         *
+         * DB:
+         * 500
+         * 1000
+         * 1500
+         * 5000
+         *
+         * It must find exactly 1500.
+         * ------------------------------------------------------
+         */
+
+        const matchingActivation =
+          activations.find(
+            (activation) => {
+              const activeAmount =
+                Number(
+                  activation.package_amount
+                );
+
+              return (
+                Number.isFinite(activeAmount) &&
+                activeAmount === amount
+              );
+            }
+          );
+
+
+        /*
+         * ------------------------------------------------------
+         * PACKAGE NOT ACTIVE
+         * ------------------------------------------------------
+         */
+
+        if (!matchingActivation) {
+          setIsActivated(false);
+          setIsChecking(false);
+          return;
+        }
+
+
+        /*
+         * ------------------------------------------------------
+         * PACKAGE FOUND
+         * ------------------------------------------------------
+         */
+
+        const active =
+          isActivationActive(
+            matchingActivation
+          );
+
+        setIsActivated(active);
+        setIsChecking(false);
+
+      } catch (error) {
         console.error(
-          "Active package check error:",
+          "ACTIVE PACKAGE CHECK FAILED:",
           error
         );
 
-        setIsActivated(false);
+        /*
+         * Keep previous state during unexpected
+         * temporary errors.
+         */
+
         setIsChecking(false);
-        return;
       }
+    },
+    [amount]
+  );
 
-      let activations: Activation[] = [];
-
-      if (Array.isArray(data)) {
-        activations = data as Activation[];
-      } else if (
-        data &&
-        typeof data === "object"
-      ) {
-        activations = [data as Activation];
-      }
-
-      const matchingPackage = activations.find(
-        (item) =>
-          Number(item.package_amount) ===
-          Number(amount)
-      );
-
-      if (!matchingPackage) {
-        setIsActivated(false);
-        setIsChecking(false);
-        return;
-      }
-
-      const now = new Date();
-
-      let active = true;
-
-      if (matchingPackage.expires_at) {
-        const expiresAt = new Date(
-          matchingPackage.expires_at
-        );
-
-        if (now >= expiresAt) {
-          active = false;
-        }
-      }
-
-      if (matchingPackage.deactivated_at) {
-        const deactivatedAt = new Date(
-          matchingPackage.deactivated_at
-        );
-
-        if (now >= deactivatedAt) {
-          active = false;
-        }
-      }
-
-      setIsActivated(active);
-      setIsChecking(false);
-    } catch (error) {
-      console.error(
-        "Package active check failed:",
-        error
-      );
-
-      setIsActivated(false);
-      setIsChecking(false);
-    }
-  }, [amount]);
 
   /*
-   * =====================================================
-   * AUTH LISTENER
-   * =====================================================
+   * ==========================================================
+   * INITIAL LOAD
+   * AUTH CHANGE
+   * TAB FOCUS
+   * PERIODIC REFRESH
+   * ==========================================================
    */
 
   useEffect(() => {
-    checkActivePackage();
+    /*
+     * Immediately check database when card loads.
+     */
+    checkActivePackage(true);
 
+
+    /*
+     * Supabase authentication changes.
+     */
     const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange((event) => {
-      if (
-        event === "SIGNED_IN" ||
-        event === "SIGNED_OUT" ||
-        event === "TOKEN_REFRESHED" ||
-        event === "USER_UPDATED"
-      ) {
-        checkActivePackage();
-      }
-    });
+      data: {
+        subscription,
+      },
+    } =
+      supabase.auth.onAuthStateChange(
+        (event) => {
+          if (
+            event === "SIGNED_IN" ||
+            event === "SIGNED_OUT" ||
+            event === "TOKEN_REFRESHED" ||
+            event === "USER_UPDATED"
+          ) {
+            /*
+             * Small delay prevents race conditions
+             * between auth state and session storage.
+             */
 
-    const interval = setInterval(() => {
-      checkActivePackage();
-    }, 30000);
+            window.setTimeout(() => {
+              checkActivePackage(true);
+            }, 150);
+          }
+        }
+      );
+
+
+    /*
+     * When returning to the page/tab.
+     */
+    const handleFocus = () => {
+      checkActivePackage(false);
+    };
+
+    window.addEventListener(
+      "focus",
+      handleFocus
+    );
+
+
+    /*
+     * When browser restores page from bfcache.
+     */
+    const handlePageShow = () => {
+      checkActivePackage(false);
+    };
+
+    window.addEventListener(
+      "pageshow",
+      handlePageShow
+    );
+
+
+    /*
+     * Periodic database synchronization.
+     */
+    const interval =
+      window.setInterval(() => {
+        checkActivePackage(false);
+      }, 10000);
+
 
     return () => {
       subscription.unsubscribe();
-      clearInterval(interval);
+
+      window.removeEventListener(
+        "focus",
+        handleFocus
+      );
+
+      window.removeEventListener(
+        "pageshow",
+        handlePageShow
+      );
+
+      window.clearInterval(interval);
     };
   }, [checkActivePackage]);
 
+
   /*
-   * =====================================================
+   * ==========================================================
    * ACTIVATE PACKAGE
-   * =====================================================
+   * ==========================================================
    */
 
   const handleActivate = async () => {
-    if (isActivating) return;
+    if (isActivating) {
+      return;
+    }
 
     try {
       setIsActivating(true);
 
+
+      /*
+       * ------------------------------------------------------
+       * CHECK LOGIN
+       * ------------------------------------------------------
+       */
+
       const {
         data: { user },
       } = await supabase.auth.getUser();
 
       if (!user) {
-        setIsActivating(false);
-
         showPopup(
           "login",
           "Login প্রয়োজন",
@@ -375,8 +573,11 @@ export default function PackageCard({ pkg }: Props) {
         return;
       }
 
+
       /*
-       * Check already active
+       * ------------------------------------------------------
+       * FINAL DATABASE CHECK
+       * ------------------------------------------------------
        */
 
       const {
@@ -386,104 +587,103 @@ export default function PackageCard({ pkg }: Props) {
         "get_my_active_packages"
       );
 
-      if (!activeError) {
-        let activations: Activation[] = [];
-
-        if (Array.isArray(activeData)) {
-          activations =
-            activeData as Activation[];
-        } else if (
-          activeData &&
-          typeof activeData === "object"
-        ) {
-          activations = [
-            activeData as Activation,
-          ];
-        }
-
-        const existing = activations.find(
-          (item) =>
-            Number(item.package_amount) ===
-            Number(amount)
+      if (activeError) {
+        console.error(
+          "PRE ACTIVATION CHECK ERROR:",
+          activeError
         );
 
-        if (existing) {
-          let active = true;
-          const now = new Date();
+        showPopup(
+          "error",
+          "তথ্য যাচাই করা যায়নি",
+          "প্যাকেজ চালু করার আগে আপনার বর্তমান প্যাকেজের তথ্য যাচাই করা যায়নি। আবার চেষ্টা করুন।"
+        );
 
-          if (existing.expires_at) {
-            const expiresAt = new Date(
-              existing.expires_at
-            );
-
-            if (now >= expiresAt) {
-              active = false;
-            }
-          }
-
-          if (existing.deactivated_at) {
-            const deactivatedAt = new Date(
-              existing.deactivated_at
-            );
-
-            if (now >= deactivatedAt) {
-              active = false;
-            }
-          }
-
-          if (active) {
-            setIsActivated(true);
-            setIsActivating(false);
-
-            showPopup(
-              "warning",
-              "প্যাকেজ ইতিমধ্যে চালু",
-              "এই প্যাকেজটি আপনার অ্যাকাউন্টে ইতিমধ্যে সক্রিয় আছে।"
-            );
-
-            return;
-          }
-        }
+        return;
       }
 
+
+      const activations =
+        normalizeActivations(
+          activeData
+        );
+
+
       /*
-       * =================================================
-       * DATABASE ACTIVATION
-       * =================================================
-       *
-       * এখানে শুধু package_amount পাঠানো হচ্ছে।
-       *
-       * Database-এর activate_my_package()
-       * master packages table থেকে:
-       *
-       * package_amount
-       * daily_reward
-       * duration_days
-       *
-       * নিজে নিয়ে activation তৈরি করবে।
+       * Find this exact package.
        */
 
-      const { data, error } = await supabase.rpc(
+      const existing =
+        activations.find(
+          (activation) =>
+            Number(
+              activation.package_amount
+            ) === amount
+        );
+
+
+      /*
+       * Already active.
+       */
+
+      if (
+        existing &&
+        isActivationActive(existing)
+      ) {
+        setIsActivated(true);
+
+        showPopup(
+          "warning",
+          "প্যাকেজ ইতিমধ্যে চালু",
+          "এই প্যাকেজটি আপনার অ্যাকাউন্টে ইতিমধ্যে সক্রিয় আছে।"
+        );
+
+        return;
+      }
+
+
+      /*
+       * ------------------------------------------------------
+       * ACTIVATE IN DATABASE
+       * ------------------------------------------------------
+       */
+
+      const {
+        data,
+        error,
+      } = await supabase.rpc(
         "activate_my_package",
         {
           p_package_amount: amount,
         }
       );
 
+
       if (error) {
         console.error(
-          "Package activation error:",
+          "PACKAGE ACTIVATION ERROR:",
           error
         );
 
         const errorText =
-          error.message?.toLowerCase() || "";
+          String(
+            error.message || ""
+          ).toLowerCase();
+
 
         if (
-          errorText.includes("insufficient") ||
-          errorText.includes("balance") ||
-          errorText.includes("not enough") ||
-          errorText.includes("fund")
+          errorText.includes(
+            "insufficient"
+          ) ||
+          errorText.includes(
+            "balance"
+          ) ||
+          errorText.includes(
+            "not enough"
+          ) ||
+          errorText.includes(
+            "fund"
+          )
         ) {
           showPopup(
             "error",
@@ -491,9 +691,18 @@ export default function PackageCard({ pkg }: Props) {
             "এই প্যাকেজটি চালু করার জন্য আপনার অ্যাকাউন্টে পর্যাপ্ত ডিপোজিট ব্যালেন্স নেই।"
           );
         } else if (
-          errorText.includes("already") ||
-          errorText.includes("active")
+          errorText.includes(
+            "already"
+          ) ||
+          errorText.includes(
+            "active"
+          )
         ) {
+          /*
+           * Database itself confirms that this package
+           * is already active.
+           */
+
           setIsActivated(true);
 
           showPopup(
@@ -502,13 +711,23 @@ export default function PackageCard({ pkg }: Props) {
             "এই প্যাকেজটি আপনার অ্যাকাউন্টে ইতিমধ্যে সক্রিয় আছে।"
           );
         } else if (
-          errorText.includes("package") &&
-          errorText.includes("not found")
+          errorText.includes(
+            "authentication"
+          ) ||
+          errorText.includes(
+            "unauthorized"
+          ) ||
+          errorText.includes(
+            "not authenticated"
+          ) ||
+          errorText.includes(
+            "auth_required"
+          )
         ) {
           showPopup(
-            "error",
-            "প্যাকেজ পাওয়া যায়নি",
-            "এই প্যাকেজটি বর্তমানে সক্রিয় নেই।"
+            "login",
+            "Login প্রয়োজন",
+            "প্যাকেজ চালু করতে আগে Login করুন।"
           );
         } else {
           showPopup(
@@ -519,14 +738,14 @@ export default function PackageCard({ pkg }: Props) {
           );
         }
 
-        setIsActivating(false);
         return;
       }
 
+
       /*
-       * =================================================
-       * RPC RESPONSE
-       * =================================================
+       * ------------------------------------------------------
+       * PARSE ACTIVATION RESULT
+       * ------------------------------------------------------
        */
 
       let result: any = data;
@@ -535,13 +754,19 @@ export default function PackageCard({ pkg }: Props) {
         result = result[0];
       }
 
-      if (typeof result === "string") {
+      if (
+        typeof result === "string"
+      ) {
         const normalized =
           result.toUpperCase();
 
         if (
-          normalized.includes("ACTIVATED") ||
-          normalized.includes("SUCCESS")
+          normalized.includes(
+            "ACTIVATED"
+          ) ||
+          normalized.includes(
+            "SUCCESS"
+          )
         ) {
           result = {
             success: true,
@@ -554,10 +779,20 @@ export default function PackageCard({ pkg }: Props) {
         }
       }
 
+
       const success =
         result?.success === true ||
-        result?.status === "ACTIVATED" ||
-        result?.status === "SUCCESS";
+        result?.status ===
+          "ACTIVATED" ||
+        result?.status ===
+          "SUCCESS";
+
+
+      /*
+       * ------------------------------------------------------
+       * RPC RETURNED FAILURE
+       * ------------------------------------------------------
+       */
 
       if (!success) {
         const message =
@@ -566,12 +801,21 @@ export default function PackageCard({ pkg }: Props) {
           "প্যাকেজ চালু করার সময় একটি সমস্যা হয়েছে।";
 
         const messageText =
-          String(message).toLowerCase();
+          String(
+            message
+          ).toLowerCase();
+
 
         if (
-          messageText.includes("insufficient") ||
-          messageText.includes("balance") ||
-          messageText.includes("not enough")
+          messageText.includes(
+            "insufficient"
+          ) ||
+          messageText.includes(
+            "balance"
+          ) ||
+          messageText.includes(
+            "not enough"
+          )
         ) {
           showPopup(
             "error",
@@ -579,8 +823,12 @@ export default function PackageCard({ pkg }: Props) {
             "এই প্যাকেজটি চালু করার জন্য আপনার অ্যাকাউন্টে পর্যাপ্ত ডিপোজিট ব্যালেন্স নেই।"
           );
         } else if (
-          messageText.includes("already") ||
-          messageText.includes("active")
+          messageText.includes(
+            "already"
+          ) ||
+          messageText.includes(
+            "active"
+          )
         ) {
           setIsActivated(true);
 
@@ -597,14 +845,14 @@ export default function PackageCard({ pkg }: Props) {
           );
         }
 
-        setIsActivating(false);
         return;
       }
 
+
       /*
-       * =================================================
+       * ------------------------------------------------------
        * SUCCESS
-       * =================================================
+       * ------------------------------------------------------
        */
 
       setIsActivated(true);
@@ -615,41 +863,66 @@ export default function PackageCard({ pkg }: Props) {
         `${money(amount)} প্যাকেজটি সফলভাবে আপনার অ্যাকাউন্টে চালু হয়েছে।`
       );
 
-      await checkActivePackage();
+
+      /*
+       * ------------------------------------------------------
+       * VERIFY AGAIN FROM DATABASE
+       *
+       * This is important.
+       *
+       * The UI will not simply trust the activation RPC.
+       * It reads the actual active package again.
+       * ------------------------------------------------------
+       */
+
+      await checkActivePackage(false);
+
+
+      /*
+       * Refresh Next.js data.
+       */
+
+      router.refresh();
+
     } catch (error) {
       console.error(
-        "Unexpected activation error:",
+        "UNEXPECTED PACKAGE ACTIVATION ERROR:",
         error
       );
 
       showPopup(
         "error",
         "একটি সমস্যা হয়েছে",
-        "প্যাকেজ চালু করার সময় একটি অপ্রত্যাশিত সমস্যা হয়েছে। আবার চেষ্টা করুন।"
+        "প্যাকেজ চালু করার সময় একটি অপ্রত্যাশিত সমস্যা হয়েছে।"
       );
+
     } finally {
       setIsActivating(false);
     }
   };
 
+
   /*
-   * =====================================================
+   * ==========================================================
    * DEPOSIT
-   * =====================================================
+   * ==========================================================
    */
 
   const handleDeposit = () => {
     router.push("/deposit");
   };
 
+
   /*
-   * =====================================================
+   * ==========================================================
    * POPUP ICON
-   * =====================================================
+   * ==========================================================
    */
 
   const popupIcon = () => {
-    if (popup?.type === "success") {
+    if (
+      popup?.type === "success"
+    ) {
       return (
         <div className="flex h-14 w-14 items-center justify-center rounded-full bg-emerald-100 text-emerald-600">
           <svg
@@ -669,7 +942,9 @@ export default function PackageCard({ pkg }: Props) {
       );
     }
 
-    if (popup?.type === "warning") {
+    if (
+      popup?.type === "warning"
+    ) {
       return (
         <div className="flex h-14 w-14 items-center justify-center rounded-full bg-amber-100 text-amber-600">
           <svg
@@ -689,7 +964,9 @@ export default function PackageCard({ pkg }: Props) {
       );
     }
 
-    if (popup?.type === "login") {
+    if (
+      popup?.type === "login"
+    ) {
       return (
         <div className="flex h-14 w-14 items-center justify-center rounded-full bg-blue-100 text-blue-600">
           <svg
@@ -733,10 +1010,11 @@ export default function PackageCard({ pkg }: Props) {
     );
   };
 
+
   /*
-   * =====================================================
+   * ==========================================================
    * CARD UI
-   * =====================================================
+   * ==========================================================
    */
 
   return (
@@ -748,38 +1026,39 @@ export default function PackageCard({ pkg }: Props) {
         <div
           className="relative h-[132px] overflow-hidden"
           style={{
-            background: visual.background,
+            background:
+              visual.background,
           }}
         >
           <div
             className="absolute -right-10 -top-10 h-28 w-28 rounded-full"
             style={{
-              background: visual.glow,
+              background:
+                visual.glow,
             }}
           />
 
           <div
             className="absolute -bottom-12 -left-8 h-28 w-28 rounded-full"
             style={{
-              background: visual.glow,
+              background:
+                visual.glow,
             }}
           />
-
-          {/* Label */}
 
           <div className="absolute left-4 top-4">
             <span
               className="rounded-full border bg-white/70 px-3 py-1 text-[10px] font-black uppercase tracking-[0.12em] backdrop-blur"
               style={{
-                color: visual.dark,
-                borderColor: visual.border,
+                color:
+                  visual.dark,
+                borderColor:
+                  visual.border,
               }}
             >
               প্যাকেজ
             </span>
           </div>
-
-          {/* Active */}
 
           {isActivated && (
             <div className="absolute right-3 top-3">
@@ -790,24 +1069,27 @@ export default function PackageCard({ pkg }: Props) {
             </div>
           )}
 
-          {/* Huge Amount */}
-
           <div className="absolute inset-0 flex items-center justify-center pt-4">
             <div className="text-center">
               <div
                 className="text-[42px] font-black leading-none tracking-[-0.06em]"
                 style={{
-                  color: visual.dark,
-                  textShadow: `0 4px 20px ${visual.glow}`,
+                  color:
+                    visual.dark,
+                  textShadow:
+                    `0 4px 20px ${visual.glow}`,
                 }}
               >
-                {amount.toLocaleString("en-BD")}
+                {amount.toLocaleString(
+                  "en-BD"
+                )}
               </div>
 
               <div
                 className="mt-1 text-[11px] font-black uppercase tracking-[0.18em]"
                 style={{
-                  color: visual.text,
+                  color:
+                    visual.text,
                 }}
               >
                 টাকা
@@ -816,13 +1098,13 @@ export default function PackageCard({ pkg }: Props) {
           </div>
         </div>
 
+
         {/* Content */}
 
         <div className="p-3.5">
 
-          {/* Name */}
-
           <div className="mb-3 flex items-start justify-between gap-3">
+
             <div>
               <h2 className="text-base font-black leading-tight text-slate-900">
                 {packageName}
@@ -838,19 +1120,21 @@ export default function PackageCard({ pkg }: Props) {
             <div
               className="shrink-0 rounded-xl px-2.5 py-1.5 text-xs font-black"
               style={{
-                background: visual.background,
-                color: visual.dark,
+                background:
+                  visual.background,
+                color:
+                  visual.dark,
               }}
             >
               {money(amount)}
             </div>
+
           </div>
+
 
           {/* Stats */}
 
           <div className="grid grid-cols-3 gap-2">
-
-            {/* Daily */}
 
             <div className="rounded-2xl border border-slate-100 bg-slate-50 p-2.5">
               <div className="mb-1 text-[9px] font-bold text-slate-400">
@@ -858,11 +1142,12 @@ export default function PackageCard({ pkg }: Props) {
               </div>
 
               <div className="text-sm font-black text-slate-900">
-                {money(dailyEarning)}
+                {money(
+                  dailyEarning
+                )}
               </div>
             </div>
 
-            {/* Total */}
 
             <div className="rounded-2xl border border-slate-100 bg-slate-50 p-2.5">
               <div className="mb-1 text-[9px] font-bold text-slate-400">
@@ -870,11 +1155,12 @@ export default function PackageCard({ pkg }: Props) {
               </div>
 
               <div className="text-sm font-black text-slate-900">
-                {money(totalEarning)}
+                {money(
+                  totalEarning
+                )}
               </div>
             </div>
 
-            {/* Duration */}
 
             <div className="rounded-2xl border border-slate-100 bg-slate-50 p-2.5">
               <div className="mb-1 text-[9px] font-bold text-slate-400">
@@ -892,10 +1178,13 @@ export default function PackageCard({ pkg }: Props) {
 
           </div>
 
+
           {/* Status */}
 
           <div className="mt-3 flex items-center justify-between rounded-2xl border border-slate-100 bg-white px-3 py-2.5">
+
             <div className="flex items-center gap-2">
+
               <span
                 className={`h-2 w-2 rounded-full ${
                   isActivated
@@ -909,6 +1198,7 @@ export default function PackageCard({ pkg }: Props) {
                   ? "প্যাকেজ সক্রিয়"
                   : "প্যাকেজ নিষ্ক্রিয়"}
               </span>
+
             </div>
 
             <span className="text-[10px] font-bold text-slate-400">
@@ -918,18 +1208,23 @@ export default function PackageCard({ pkg }: Props) {
                 ? "চলমান"
                 : "চালু করুন"}
             </span>
+
           </div>
+
 
           {/* Activate Button */}
 
           <div className="mt-3">
+
             {isActivated ? (
+
               <button
                 type="button"
                 disabled
                 className="flex h-11 w-full items-center justify-center gap-2 rounded-2xl bg-emerald-50 text-sm font-black text-emerald-600"
               >
                 <span className="flex h-5 w-5 items-center justify-center rounded-full bg-emerald-500 text-white">
+
                   <svg
                     viewBox="0 0 24 24"
                     className="h-3.5 w-3.5"
@@ -943,16 +1238,23 @@ export default function PackageCard({ pkg }: Props) {
                       d="M5 12.5l4 4L19 7"
                     />
                   </svg>
+
                 </span>
 
                 Active Now
+
               </button>
+
             ) : (
+
               <button
                 type="button"
-                onClick={handleActivate}
+                onClick={
+                  handleActivate
+                }
                 disabled={
-                  isActivating || isChecking
+                  isActivating ||
+                  isChecking
                 }
                 className="flex h-11 w-full items-center justify-center gap-2 rounded-2xl text-sm font-black text-white shadow-sm transition active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-60"
                 style={{
@@ -960,14 +1262,21 @@ export default function PackageCard({ pkg }: Props) {
                     `linear-gradient(135deg, ${visual.text}, ${visual.dark})`,
                 }}
               >
+
                 {isActivating ? (
+
                   <>
                     <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white" />
+
                     চালু হচ্ছে...
                   </>
+
                 ) : isChecking ? (
+
                   "অপেক্ষা করুন..."
+
                 ) : (
+
                   <>
                     প্যাকেজ চালু করুন
 
@@ -985,42 +1294,52 @@ export default function PackageCard({ pkg }: Props) {
                       />
                     </svg>
                   </>
+
                 )}
+
               </button>
+
             )}
+
           </div>
 
-          {/* Deposit */}
 
           {!isActivated && (
             <button
               type="button"
-              onClick={handleDeposit}
+              onClick={
+                handleDeposit
+              }
               className="mt-2 w-full py-1 text-center text-[11px] font-bold text-slate-400 transition hover:text-green-600"
             >
               ব্যালেন্স নেই? ডিপোজিট করুন
             </button>
           )}
+
         </div>
+
       </article>
 
-      {/* =====================================================
+
+      {/* ======================================================
           POPUP
-      ===================================================== */}
+          ====================================================== */}
 
       {popup && (
+
         <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/55 px-4 backdrop-blur-[2px]">
 
           <div className="relative max-h-[90vh] w-full max-w-sm overflow-y-auto rounded-[28px] bg-white shadow-2xl">
 
-            {/* Close */}
-
             <button
               type="button"
-              onClick={closePopup}
+              onClick={
+                closePopup
+              }
               className="absolute right-4 top-4 z-10 flex h-9 w-9 items-center justify-center rounded-full bg-slate-100 text-slate-500 transition hover:bg-slate-200"
               aria-label="বন্ধ করুন"
             >
+
               <svg
                 viewBox="0 0 24 24"
                 className="h-4 w-4"
@@ -1034,46 +1353,50 @@ export default function PackageCard({ pkg }: Props) {
                   d="M6 6l12 12M18 6L6 18"
                 />
               </svg>
+
             </button>
 
-            <div className="px-6 pb-6 pt-8 text-center">
 
-              {/* Icon */}
+            <div className="px-6 pb-6 pt-8 text-center">
 
               <div className="flex justify-center">
                 {popupIcon()}
               </div>
 
-              {/* Title */}
 
               <h3 className="mt-5 text-xl font-black text-slate-900">
                 {popup.title}
               </h3>
 
-              {/* Message */}
 
               <p className="mx-auto mt-2 max-w-xs text-sm leading-6 text-slate-500">
                 {popup.message}
               </p>
 
-              {/* Login */}
 
               {popup.type === "login" ? (
+
                 <div className="mt-6 grid grid-cols-2 gap-2.5">
 
                   <button
                     type="button"
-                    onClick={closePopup}
+                    onClick={
+                      closePopup
+                    }
                     className="h-11 rounded-2xl bg-slate-100 text-sm font-black text-slate-600"
                   >
                     পরে করব
                   </button>
 
+
                   <button
                     type="button"
                     onClick={() => {
                       closePopup();
-                      router.push("/login");
+
+                      router.push(
+                        "/login"
+                      );
                     }}
                     className="h-11 rounded-2xl bg-slate-900 text-sm font-black text-white"
                   >
@@ -1081,19 +1404,22 @@ export default function PackageCard({ pkg }: Props) {
                   </button>
 
                 </div>
+
               ) : popup.type === "error" &&
-                popup.message.includes(
-                  "ব্যালেন্স"
-                ) ? (
+                popup.message.includes("ব্যালেন্স") ? (
+
                 <div className="mt-6 grid grid-cols-2 gap-2.5">
 
                   <button
                     type="button"
-                    onClick={closePopup}
+                    onClick={
+                      closePopup
+                    }
                     className="h-11 rounded-2xl bg-slate-100 text-sm font-black text-slate-600"
                   >
                     বন্ধ করুন
                   </button>
+
 
                   <button
                     type="button"
@@ -1107,10 +1433,14 @@ export default function PackageCard({ pkg }: Props) {
                   </button>
 
                 </div>
+
               ) : (
+
                 <button
                   type="button"
-                  onClick={closePopup}
+                  onClick={
+                    closePopup
+                  }
                   className={`mt-6 h-11 w-full rounded-2xl text-sm font-black text-white ${
                     popup.type === "success"
                       ? "bg-emerald-600"
@@ -1121,12 +1451,17 @@ export default function PackageCard({ pkg }: Props) {
                 >
                   ঠিক আছে
                 </button>
+
               )}
 
             </div>
+
           </div>
+
         </div>
+
       )}
+
     </>
   );
 }
