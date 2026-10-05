@@ -119,6 +119,62 @@ function maskAccountNumber(account: string) {
   return `${value.slice(0, 3)}******${value.slice(-3)}`;
 }
 
+/*
+ * =====================================================
+ * BANGLADESH TIME
+ * Withdraw: 10:00 AM - 5:00 PM
+ * =====================================================
+ */
+
+function getBangladeshTime() {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "Asia/Dhaka",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  }).formatToParts(new Date());
+
+  const hour = Number(
+    parts.find((item) => item.type === "hour")?.value || 0
+  );
+
+  const minute = Number(
+    parts.find((item) => item.type === "minute")?.value || 0
+  );
+
+  const second = Number(
+    parts.find((item) => item.type === "second")?.value || 0
+  );
+
+  const totalSeconds =
+    hour * 3600 +
+    minute * 60 +
+    second;
+
+  const openingTime = 10 * 3600;
+  const closingTime = 17 * 3600;
+
+  return {
+    hour,
+    minute,
+    second,
+    isOpen:
+      totalSeconds >= openingTime &&
+      totalSeconds < closingTime,
+  };
+}
+
+function getBangladeshDateKey(dateValue?: string) {
+  const date = dateValue
+    ? new Date(dateValue)
+    : new Date();
+
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Dhaka",
+  }).format(date);
+}
+
 export default function WithdrawPage() {
   const [wallet, setWallet] = useState<Wallet | null>(null);
 
@@ -144,6 +200,20 @@ export default function WithdrawPage() {
 
   /*
    * =====================================================
+   * WITHDRAW TIME STATE
+   * =====================================================
+   */
+
+  const [withdrawOpen, setWithdrawOpen] = useState(false);
+
+  const [showWithdrawPopup, setShowWithdrawPopup] =
+    useState(true);
+
+  const [currentTime, setCurrentTime] =
+    useState(() => getBangladeshTime());
+
+  /*
+   * =====================================================
    * SELECTED AMOUNT CALCULATION
    * =====================================================
    */
@@ -163,8 +233,7 @@ export default function WithdrawPage() {
         (
           selectedAmount *
           WITHDRAWAL_FEE_PERCENT
-        ) /
-          100
+        ) / 100
       )
     : 0;
 
@@ -176,6 +245,31 @@ export default function WithdrawPage() {
         ).toFixed(2)
       )
     : 0;
+
+  /*
+   * =====================================================
+   * TODAY WITHDRAW CHECK
+   * =====================================================
+   */
+
+  const hasWithdrawnToday = useMemo(() => {
+    const today = getBangladeshDateKey();
+
+    return withdrawals.some((withdrawal) => {
+      const dateValue =
+        withdrawal.requested_at ||
+        withdrawal.created_at;
+
+      if (!dateValue) {
+        return false;
+      }
+
+      return (
+        getBangladeshDateKey(dateValue) ===
+        today
+      );
+    });
+  }, [withdrawals]);
 
   /*
    * =====================================================
@@ -330,7 +424,7 @@ export default function WithdrawPage() {
 
                   net_amount:
                     item.net_amount !==
-                    null &&
+                      null &&
                     item.net_amount !==
                       undefined
                       ? Number(
@@ -338,8 +432,7 @@ export default function WithdrawPage() {
                         )
                       : Number(
                           item.amount || 0
-                        ) *
-                          0.9,
+                        ) * 0.9,
 
                   payment_method:
                     String(
@@ -440,6 +533,42 @@ export default function WithdrawPage() {
   }, [loadData]);
 
   /*
+   * UPDATE BANGLADESH TIME
+   */
+
+  useEffect(() => {
+    const updateTime = () => {
+      setCurrentTime(
+        getBangladeshTime()
+      );
+    };
+
+    updateTime();
+
+    const timer =
+      window.setInterval(
+        updateTime,
+        1000
+      );
+
+    return () => {
+      window.clearInterval(
+        timer
+      );
+    };
+  }, []);
+
+  /*
+   * UPDATE WITHDRAW OPEN/CLOSED
+   */
+
+  useEffect(() => {
+    setWithdrawOpen(
+      currentTime.isOpen
+    );
+  }, [currentTime]);
+
+  /*
    * AUTO REFRESH
    */
 
@@ -489,6 +618,32 @@ export default function WithdrawPage() {
   async function submitWithdrawal() {
     setMessage("");
     setError("");
+
+    /*
+     * Withdraw time check
+     */
+
+    const timeNow =
+      getBangladeshTime();
+
+    if (!timeNow.isOpen) {
+      setError(
+        "বর্তমানে উত্তোলন বন্ধ। প্রতিদিন সকাল ১০টা থেকে বিকেল ৫টা পর্যন্ত উত্তোলন করা যাবে।"
+      );
+      setShowWithdrawPopup(true);
+      return;
+    }
+
+    /*
+     * One withdrawal per day
+     */
+
+    if (hasWithdrawnToday) {
+      setError(
+        "আজকে আপনার একটি উত্তোলনের অনুরোধ ইতিমধ্যে দেওয়া হয়েছে। আগামীকাল সকাল ১০টা থেকে আবার উত্তোলন করতে পারবেন।"
+      );
+      return;
+    }
 
     if (!selectedAmount) {
       setError(
@@ -645,11 +800,13 @@ export default function WithdrawPage() {
       <main className="min-h-screen bg-[#f5f7f6] px-4 py-10">
         <div className="mx-auto max-w-3xl">
           <div className="rounded-[28px] bg-white p-10 text-center shadow-sm">
+
             <div className="mx-auto h-8 w-8 animate-spin rounded-full border-4 border-green-100 border-t-green-600" />
 
             <p className="mt-4 text-sm font-semibold text-black/50">
               তথ্য লোড হচ্ছে...
             </p>
+
           </div>
         </div>
       </main>
@@ -658,6 +815,125 @@ export default function WithdrawPage() {
 
   return (
     <main className="min-h-screen bg-[#f5f7f6] text-[#111827]">
+
+      {/* =================================================
+          WITHDRAW INFO POPUP
+      ================================================= */}
+
+      {showWithdrawPopup && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/40 px-5 backdrop-blur-[2px]">
+
+          <div className="w-full max-w-[340px] overflow-hidden rounded-[24px] bg-white shadow-[0_25px_80px_rgba(0,0,0,0.25)]">
+
+            <div className="p-5">
+
+              <div className="flex items-start justify-between gap-3">
+
+                <div className="flex items-center gap-3">
+
+                  <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-green-50 text-lg">
+                    ৳
+                  </div>
+
+                  <div>
+                    <h2 className="text-base font-black text-[#111827]">
+                      উত্তোলনের সময়সূচি
+                    </h2>
+
+                    <p className="mt-0.5 text-[10px] font-semibold text-black/35">
+                      বাংলাদেশ সময়
+                    </p>
+                  </div>
+
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() =>
+                    setShowWithdrawPopup(
+                      false
+                    )
+                  }
+                  className="flex h-7 w-7 items-center justify-center rounded-full bg-black/[0.04] text-sm font-bold text-black/45"
+                  aria-label="বন্ধ করুন"
+                >
+                  ×
+                </button>
+
+              </div>
+
+              <div className="mt-4 space-y-2">
+
+                <div className="flex items-center gap-2 rounded-xl bg-green-50 px-3 py-2.5">
+                  <span className="text-sm">
+                    ⏰
+                  </span>
+
+                  <p className="text-xs font-bold text-green-800">
+                    সকাল ১০টা – বিকেল ৫টা
+                  </p>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <span className="text-sm">
+                    💰
+                  </span>
+
+                  <p className="text-xs font-semibold text-black/60">
+                    দিনে ১ বার উত্তোলন করা যাবে।
+                  </p>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <span className="text-sm">
+                    🌙
+                  </span>
+
+                  <p className="text-xs font-semibold text-black/60">
+                    ৫টার পর উত্তোলন বন্ধ থাকবে।
+                  </p>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <span className="text-sm">
+                    📅
+                  </span>
+
+                  <p className="text-xs font-semibold text-black/60">
+                    পরদিন সকাল ১০টায় আবার চালু হবে।
+                  </p>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <span className="text-sm">
+                    💳
+                  </span>
+
+                  <p className="text-xs font-semibold text-black/60">
+                    ডিপোজিট ২৪ ঘণ্টাই চালু।
+                  </p>
+                </div>
+
+              </div>
+
+              <button
+                type="button"
+                onClick={() =>
+                  setShowWithdrawPopup(
+                    false
+                  )
+                }
+                className="mt-4 w-full rounded-xl bg-[#111827] px-4 py-3 text-xs font-black text-white transition active:scale-[0.98] hover:bg-green-600"
+              >
+                বুঝেছি
+              </button>
+
+            </div>
+
+          </div>
+
+        </div>
+      )}
 
       <div className="mx-auto max-w-3xl px-4 py-5 pb-28 sm:px-6">
 
@@ -704,6 +980,49 @@ export default function WithdrawPage() {
           </div>
 
         </header>
+
+        {/* WITHDRAW STATUS */}
+
+        <button
+          type="button"
+          onClick={() =>
+            setShowWithdrawPopup(true)
+          }
+          className={`mb-5 flex w-full items-center justify-between rounded-2xl border px-4 py-3 text-left shadow-sm ${
+            withdrawOpen && !hasWithdrawnToday
+              ? "border-green-100 bg-green-50"
+              : "border-yellow-100 bg-yellow-50"
+          }`}
+        >
+
+          <div>
+
+            <p className="text-[10px] font-black tracking-wide text-black/40">
+              উত্তোলনের সময়
+            </p>
+
+            <p
+              className={`mt-1 text-sm font-black ${
+                withdrawOpen &&
+                !hasWithdrawnToday
+                  ? "text-green-700"
+                  : "text-yellow-700"
+              }`}
+            >
+              {hasWithdrawnToday
+                ? "আজকের উত্তোলন সম্পন্ন"
+                : withdrawOpen
+                ? "এখন উত্তোলন করা যাবে"
+                : "এখন উত্তোলন বন্ধ"}
+            </p>
+
+          </div>
+
+          <span className="rounded-full bg-white px-3 py-1.5 text-[10px] font-black shadow-sm">
+            ১০টা–৫টা
+          </span>
+
+        </button>
 
         {/* ERROR */}
 
@@ -760,6 +1079,7 @@ export default function WithdrawPage() {
                 <p className="text-[11px] text-white/45">
                   সর্বনিম্ন
                 </p>
+
                 <p className="mt-1 text-base font-black">
                   ৳200
                 </p>
@@ -769,10 +1089,23 @@ export default function WithdrawPage() {
                 <p className="text-[11px] text-white/45">
                   উত্তোলন ফি
                 </p>
+
                 <p className="mt-1 text-base font-black">
                   ১০%
                 </p>
               </div>
+
+            </div>
+
+            <div className="mt-3 border-t border-white/10 pt-3">
+
+              <p className="text-[11px] text-white/45">
+                সময়
+              </p>
+
+              <p className="mt-1 text-sm font-black">
+                সকাল ১০টা – বিকেল ৫টা
+              </p>
 
             </div>
 
@@ -857,6 +1190,11 @@ export default function WithdrawPage() {
                   (wallet?.earning_balance ||
                     0) < amount;
 
+                const disabled =
+                  insufficient ||
+                  !withdrawOpen ||
+                  hasWithdrawnToday;
+
                 const selected =
                   selectedAmount ===
                   amount;
@@ -865,20 +1203,19 @@ export default function WithdrawPage() {
                   <button
                     key={amount}
                     type="button"
-                    disabled={
-                      insufficient
-                    }
+                    disabled={disabled}
                     onClick={() => {
                       setSelectedAmount(
                         amount
                       );
+
                       setError("");
                       setMessage("");
                     }}
                     className={`rounded-2xl border p-4 text-left transition active:scale-[0.98] ${
                       selected
                         ? "border-green-500 bg-green-50 ring-4 ring-green-500/10"
-                        : insufficient
+                        : disabled
                         ? "border-black/5 bg-gray-50 opacity-45"
                         : "border-black/8 bg-white hover:-translate-y-0.5 hover:border-green-300"
                     }`}
@@ -900,7 +1237,11 @@ export default function WithdrawPage() {
 
                     <p className="mt-2 text-xs font-semibold text-black/40">
 
-                      {insufficient
+                      {hasWithdrawnToday
+                        ? "আজকের উত্তোলন শেষ"
+                        : !withdrawOpen
+                        ? "১০টা–৫টা"
+                        : insufficient
                         ? "ব্যালেন্স কম"
                         : amount === 200
                         ? "সর্বনিম্ন"
@@ -915,6 +1256,34 @@ export default function WithdrawPage() {
 
           </div>
 
+          {!withdrawOpen && (
+            <div className="mt-4 rounded-2xl bg-yellow-50 px-4 py-3">
+
+              <p className="text-xs font-bold text-yellow-800">
+                এখন উত্তোলন বন্ধ।
+              </p>
+
+              <p className="mt-1 text-[11px] leading-5 text-yellow-700/70">
+                প্রতিদিন সকাল ১০টা থেকে বিকেল ৫টা পর্যন্ত উত্তোলন করা যাবে।
+              </p>
+
+            </div>
+          )}
+
+          {hasWithdrawnToday && (
+            <div className="mt-4 rounded-2xl bg-blue-50 px-4 py-3">
+
+              <p className="text-xs font-bold text-blue-800">
+                আজকের উত্তোলন ইতিমধ্যে দেওয়া হয়েছে।
+              </p>
+
+              <p className="mt-1 text-[11px] leading-5 text-blue-700/70">
+                আগামীকাল সকাল ১০টা থেকে আবার উত্তোলন করতে পারবেন।
+              </p>
+
+            </div>
+          )}
+
         </section>
 
         {/* CALCULATION */}
@@ -925,6 +1294,7 @@ export default function WithdrawPage() {
             <div className="flex items-center justify-between">
 
               <div>
+
                 <p className="text-xs font-bold text-green-700/60">
                   আপনার উত্তোলনের হিসাব
                 </p>
@@ -932,6 +1302,7 @@ export default function WithdrawPage() {
                 <p className="mt-1 text-lg font-black text-green-900">
                   টাকা পাওয়ার হিসাব
                 </p>
+
               </div>
 
               <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-white text-lg shadow-sm">
@@ -975,6 +1346,7 @@ export default function WithdrawPage() {
                 <div className="flex items-end justify-between">
 
                   <div>
+
                     <p className="text-xs font-bold text-green-700/60">
                       আপনি পাবেন
                     </p>
@@ -984,6 +1356,7 @@ export default function WithdrawPage() {
                         netAmount
                       )}
                     </p>
+
                   </div>
 
                   <span className="mb-1 rounded-full bg-white px-3 py-1 text-[10px] font-black text-green-700 shadow-sm">
@@ -1098,25 +1471,31 @@ export default function WithdrawPage() {
               <div className="mt-3 space-y-2">
 
                 <div className="flex justify-between text-sm">
+
                   <span className="text-black/45">
                     উত্তোলন
                   </span>
+
                   <span className="font-black">
                     {taka(
                       selectedAmount
                     )}
                   </span>
+
                 </div>
 
                 <div className="flex justify-between text-sm">
+
                   <span className="text-black/45">
                     ফি
                   </span>
+
                   <span className="font-black text-red-600">
                     {taka(
                       calculatedFee
                     )}
                   </span>
+
                 </div>
 
                 <div className="border-t border-black/5 pt-2">
@@ -1149,7 +1528,9 @@ export default function WithdrawPage() {
             disabled={
               submitting ||
               !selectedAmount ||
-              !accountNumber.trim()
+              !accountNumber.trim() ||
+              !withdrawOpen ||
+              hasWithdrawnToday
             }
             onClick={
               submitWithdrawal
@@ -1159,6 +1540,10 @@ export default function WithdrawPage() {
 
             {submitting
               ? "অনুরোধ জমা হচ্ছে..."
+              : hasWithdrawnToday
+              ? "আজকের উত্তোলন শেষ"
+              : !withdrawOpen
+              ? "উত্তোলন সকাল ১০টা–বিকেল ৫টা"
               : selectedAmount
               ? `${taka(
                   netAmount
@@ -1168,7 +1553,7 @@ export default function WithdrawPage() {
           </button>
 
           <p className="mt-3 text-center text-[10px] leading-5 text-black/30">
-            অনুরোধ জমা দেওয়ার আগে পরিমাণ, ফি এবং অ্যাকাউন্ট নম্বর যাচাই করে নিন।
+            প্রতিদিন সকাল ১০টা থেকে বিকেল ৫টা পর্যন্ত দিনে একবার উত্তোলন করা যাবে।
           </p>
 
         </section>
@@ -1180,6 +1565,7 @@ export default function WithdrawPage() {
           <div className="mb-3 flex items-center justify-between">
 
             <div>
+
               <h2 className="text-lg font-black">
                 উত্তোলনের ইতিহাস
               </h2>
@@ -1187,6 +1573,7 @@ export default function WithdrawPage() {
               <p className="mt-1 text-[11px] text-black/35">
                 আপনার আগের সব উত্তোলনের তথ্য
               </p>
+
             </div>
 
             {refreshing && (
