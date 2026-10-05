@@ -141,32 +141,44 @@ export default function ProfilePage() {
   const [showReferralDetails, setShowReferralDetails] =
     useState(false);
 
- const commissionLevels: CommissionLevel[] = [
-  {
-    generation: "১ম জেনারেশন",
-    rate: "10%",
-    description: "সরাসরি আপনার রেফারেল",
-    color: "bg-purple-50 text-purple-700 border-purple-100",
-  },
-  {
-    generation: "২য় জেনারেশন",
-    rate: "3%",
-    description: "আপনার ১ম জেনারেশনের রেফারেল",
-    color: "bg-blue-50 text-blue-700 border-blue-100",
-  },
-  {
-    generation: "৩য় জেনারেশন",
-    rate: "1%",
-    description: "আপনার ২য় জেনারেশনের রেফারেল",
-    color: "bg-green-50 text-green-700 border-green-100",
-  },
-  {
-    generation: "৪র্থ+ জেনারেশন",
-    rate: "0%",
-    description: "৪র্থ ও তার পরের কোনো জেনারেশনে কমিশন নেই",
-    color: "bg-orange-50 text-orange-700 border-orange-100",
-  },
-];
+  /*
+   * ==========================================
+   * REFERRAL COMMISSION STRUCTURE
+   *
+   * ১ম জেনারেশন = ১৫%
+   * ২য় জেনারেশন = ২%
+   * ৩য় জেনারেশন = ১%
+   *
+   * UI-তে শুধুমাত্র ৩টি Generation দেখানো হবে।
+   * ==========================================
+   */
+
+  const commissionLevels: CommissionLevel[] = [
+    {
+      generation: "১ম জেনারেশন",
+      rate: "15%",
+      description: "সরাসরি আপনার রেফারেল",
+      color:
+        "bg-purple-50 text-purple-700 border-purple-100",
+    },
+    {
+      generation: "২য় জেনারেশন",
+      rate: "2%",
+      description:
+        "আপনার ১ম জেনারেশনের রেফারেল",
+      color:
+        "bg-blue-50 text-blue-700 border-blue-100",
+    },
+    {
+      generation: "৩য় জেনারেশন",
+      rate: "1%",
+      description:
+        "আপনার ২য় জেনারেশনের রেফারেল",
+      color:
+        "bg-green-50 text-green-700 border-green-100",
+    },
+  ];
+
   useEffect(() => {
     loadProfile();
   }, []);
@@ -322,14 +334,6 @@ export default function ProfilePage() {
         );
       }
 
-      /*
-       * REFERRAL USERS
-       *
-       * Direct referral users load করা হচ্ছে।
-       * তাদের status database-এর referrals.status
-       * থেকে নেওয়া হচ্ছে।
-       */
-
       if (
         referralsResult.data &&
         referralsResult.data.length > 0
@@ -476,7 +480,6 @@ export default function ProfilePage() {
         );
 
         setLoggingOut(false);
-
         return;
       }
 
@@ -650,7 +653,6 @@ export default function ProfilePage() {
         {/* REFERRAL SECTION */}
 
         <section className="mt-4 rounded-[28px] border border-purple-100 bg-white p-5 shadow-sm">
-
           <div className="flex items-center justify-between">
             <div>
               <p className="text-xs font-black uppercase tracking-wider text-purple-600">
@@ -675,8 +677,7 @@ export default function ProfilePage() {
             </p>
 
             <p className="mt-1 break-all text-lg font-black text-purple-700">
-              {referralCode ||
-                "তৈরি হয়নি"}
+              {referralCode || "তৈরি হয়নি"}
             </p>
           </div>
 
@@ -685,9 +686,7 @@ export default function ProfilePage() {
           {referralLink && (
             <button
               type="button"
-              onClick={
-                copyReferralLink
-              }
+              onClick={copyReferralLink}
               className="mt-3 w-full rounded-2xl bg-purple-600 px-4 py-3.5 text-sm font-black text-white transition active:scale-[0.98]"
             >
               {copied
@@ -705,8 +704,7 @@ export default function ProfilePage() {
               </span>
 
               <span className="text-sm font-black text-slate-900">
-                {referralCount}/
-                {requiredReferral}
+                {referralCount}/{requiredReferral}
               </span>
             </div>
 
@@ -723,11 +721,8 @@ export default function ProfilePage() {
               {requiredReferral} জন বৈধ রেফারেল
               সম্পন্ন হলে ৳
               {Number(
-                referral?.reward_amount ||
-                  1000
-              ).toLocaleString(
-                "en-BD"
-              )}{" "}
+                referral?.reward_amount || 1000
+              ).toLocaleString("en-BD")}{" "}
               পুরস্কারের যোগ্যতা অর্জন করবেন।
             </p>
           </div>
@@ -805,8 +800,7 @@ export default function ProfilePage() {
                 </p>
 
                 <p className="mt-1 truncate text-sm font-black text-slate-800">
-                  {profile.phone ||
-                    "-"}
+                  {profile.phone || "-"}
                 </p>
               </div>
             </div>
@@ -824,10 +818,7 @@ export default function ProfilePage() {
                 </p>
 
                 <p className="mt-1 text-sm font-black text-slate-900">
-                  {taka(
-                    wallet?.balance ||
-                      0
-                  )}
+                  {taka(wallet?.balance || 0)}
                 </p>
               </div>
             </div>
@@ -845,10 +836,7 @@ export default function ProfilePage() {
                 </p>
 
                 <p className="mt-1 text-sm font-black text-green-600">
-                  {taka(
-                    wallet?.total_earned ||
-                      0
-                  )}
+                  {taka(wallet?.total_earned || 0)}
                 </p>
               </div>
             </div>
@@ -866,8 +854,7 @@ export default function ProfilePage() {
                 </p>
 
                 <p className="mt-1 text-sm font-black text-slate-800">
-                  {activePackages.length >
-                  0
+                  {activePackages.length > 0
                     ? "সক্রিয়"
                     : "কোনো সক্রিয় প্যাকেজ নেই"}
                 </p>
@@ -915,9 +902,7 @@ export default function ProfilePage() {
                 </p>
 
                 <p className="mt-1 text-sm font-black text-slate-800">
-                  {formatDate(
-                    memberSince
-                  )}
+                  {formatDate(memberSince)}
                 </p>
               </div>
             </div>
@@ -942,57 +927,51 @@ export default function ProfilePage() {
             </div>
 
             <div className="mt-4 space-y-3">
-              {activePackages.map(
-                (item) => (
-                  <div
-                    key={item.id}
-                    className="rounded-2xl border border-purple-100 bg-purple-50 p-4"
-                  >
-                    <div className="flex items-center justify-between gap-3">
-                      <div>
-                        <p className="text-xs font-bold text-purple-600">
-                          প্যাকেজ
-                        </p>
+              {activePackages.map((item) => (
+                <div
+                  key={item.id}
+                  className="rounded-2xl border border-purple-100 bg-purple-50 p-4"
+                >
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <p className="text-xs font-bold text-purple-600">
+                        প্যাকেজ
+                      </p>
 
-                        <p className="mt-1 text-xl font-black text-slate-900">
-                          {taka(
-                            item.package_amount
-                          )}
-                        </p>
-                      </div>
-
-                      <span className="rounded-full bg-green-100 px-3 py-1.5 text-xs font-black text-green-700">
-                        সক্রিয়
-                      </span>
+                      <p className="mt-1 text-xl font-black text-slate-900">
+                        {taka(item.package_amount)}
+                      </p>
                     </div>
 
-                    <div className="mt-3 flex items-center justify-between text-xs">
-                      <span className="font-medium text-slate-500">
-                        শুরু
-                      </span>
-
-                      <span className="font-black text-slate-700">
-                        {formatDate(
-                          item.active_from ||
-                            item.activated_at
-                        )}
-                      </span>
-                    </div>
-
-                    <div className="mt-1 flex items-center justify-between text-xs">
-                      <span className="font-medium text-slate-500">
-                        শেষ
-                      </span>
-
-                      <span className="font-black text-slate-700">
-                        {formatDate(
-                          item.expires_at
-                        )}
-                      </span>
-                    </div>
+                    <span className="rounded-full bg-green-100 px-3 py-1.5 text-xs font-black text-green-700">
+                      সক্রিয়
+                    </span>
                   </div>
-                )
-              )}
+
+                  <div className="mt-3 flex items-center justify-between text-xs">
+                    <span className="font-medium text-slate-500">
+                      শুরু
+                    </span>
+
+                    <span className="font-black text-slate-700">
+                      {formatDate(
+                        item.active_from ||
+                          item.activated_at
+                      )}
+                    </span>
+                  </div>
+
+                  <div className="mt-1 flex items-center justify-between text-xs">
+                    <span className="font-medium text-slate-500">
+                      শেষ
+                    </span>
+
+                    <span className="font-black text-slate-700">
+                      {formatDate(item.expires_at)}
+                    </span>
+                  </div>
+                </div>
+              ))}
             </div>
           </section>
         )}
@@ -1142,33 +1121,37 @@ export default function ProfilePage() {
                   <h3 className="mt-1 text-lg font-black text-slate-900">
                     জেনারেশন অনুযায়ী কমিশন
                   </h3>
+
+                  <p className="mt-2 text-xs font-medium leading-5 text-slate-500">
+                    আপনার ডিপোজিট থেকে সরাসরি ১ম জেনারেশন
+                    ১৫%, ২য় জেনারেশন ২% এবং ৩য় জেনারেশন
+                    ১% কমিশন পাবে।
+                  </p>
                 </div>
 
                 <div className="space-y-3">
-                  {commissionLevels.map(
-                    (level) => (
-                      <div
-                        key={level.generation}
-                        className={`rounded-2xl border p-4 ${level.color}`}
-                      >
-                        <div className="flex items-center justify-between gap-3">
-                          <div>
-                            <p className="text-sm font-black">
-                              {level.generation}
-                            </p>
+                  {commissionLevels.map((level) => (
+                    <div
+                      key={level.generation}
+                      className={`rounded-2xl border p-4 ${level.color}`}
+                    >
+                      <div className="flex items-center justify-between gap-3">
+                        <div>
+                          <p className="text-sm font-black">
+                            {level.generation}
+                          </p>
 
-                            <p className="mt-1 text-xs font-medium opacity-75">
-                              {level.description}
-                            </p>
-                          </div>
+                          <p className="mt-1 text-xs font-medium opacity-75">
+                            {level.description}
+                          </p>
+                        </div>
 
-                          <div className="text-2xl font-black">
-                            {level.rate}
-                          </div>
+                        <div className="text-2xl font-black">
+                          {level.rate}
                         </div>
                       </div>
-                    )
-                  )}
+                    </div>
+                  ))}
                 </div>
               </div>
 
@@ -1180,8 +1163,7 @@ export default function ProfilePage() {
                 </p>
 
                 <p className="mt-1 break-all text-base font-black text-slate-800">
-                  {referralCode ||
-                    "তৈরি হয়নি"}
+                  {referralCode || "তৈরি হয়নি"}
                 </p>
               </div>
 
@@ -1221,63 +1203,61 @@ export default function ProfilePage() {
                   </div>
                 ) : (
                   <div className="mt-4 space-y-3">
-                    {referralUsers.map(
-                      (item) => {
-                        const status =
-                          getReferralStatus(
-                            item.status
-                          );
+                    {referralUsers.map((item) => {
+                      const status =
+                        getReferralStatus(
+                          item.status
+                        );
 
-                        const name =
-                          item.full_name ||
-                          item.username ||
-                          "ব্যবহারকারী";
+                      const name =
+                        item.full_name ||
+                        item.username ||
+                        "ব্যবহারকারী";
 
-                        return (
-                          <div
-                            key={item.id}
-                            className="rounded-2xl border border-slate-100 bg-slate-50 p-4"
-                          >
-                            <div className="flex items-start gap-3">
-                              <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-purple-100 text-xl">
-                                👤
-                              </div>
+                      return (
+                        <div
+                          key={item.id}
+                          className="rounded-2xl border border-slate-100 bg-slate-50 p-4"
+                        >
+                          <div className="flex items-start gap-3">
+                            <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-purple-100 text-xl">
+                              👤
+                            </div>
 
-                              <div className="min-w-0 flex-1">
-                                <div className="flex items-start justify-between gap-2">
-                                  <div className="min-w-0">
-                                    <p className="truncate text-sm font-black text-slate-900">
-                                      {name}
-                                    </p>
+                            <div className="min-w-0 flex-1">
+                              <div className="flex items-start justify-between gap-2">
+                                <div className="min-w-0">
+                                  <p className="truncate text-sm font-black text-slate-900">
+                                    {name}
+                                  </p>
 
-                                    {item.username &&
-                                      item.username !==
-                                        item.full_name && (
-                                        <p className="mt-0.5 truncate text-xs font-medium text-slate-400">
-                                          @{item.username}
-                                        </p>
-                                      )}
-                                  </div>
-
-                                  <span
-                                    className={`shrink-0 rounded-full px-2.5 py-1 text-[10px] font-black ${status.className}`}
-                                  >
-                                    {status.label}
-                                  </span>
+                                  {item.username &&
+                                    item.username !==
+                                      item.full_name && (
+                                      <p className="mt-0.5 truncate text-xs font-medium text-slate-400">
+                                        @{item.username}
+                                      </p>
+                                    )}
                                 </div>
 
-                                <p className="mt-2 text-[11px] font-medium text-slate-400">
-                                  রেফারেল করেছেন:{" "}
-                                  {formatDate(
-                                    item.created_at
-                                  )}
-                                </p>
+                                <span
+                                  className={`shrink-0 rounded-full px-2.5 py-1 text-[10px] font-black ${status.className}`}
+                                >
+                                  {status.label}
+                                </span>
                               </div>
+
+                              <p className="mt-2 text-[11px] font-medium text-slate-400">
+                                রেফারেল করেছেন:{" "}
+                                {formatDate(
+                                  item.created_at
+                                )}
+                              </p>
                             </div>
                           </div>
-                        );
-                      }
-                    )}
+                        </div>
+                      );
+                    })}
                   </div>
                 )}
               </div>
@@ -1315,7 +1295,6 @@ export default function ProfilePage() {
                   </div>
                 </div>
               </div>
-
             </div>
           </div>
         </div>
@@ -1325,50 +1304,47 @@ export default function ProfilePage() {
 
       <nav className="fixed bottom-0 left-0 right-0 z-[100] px-3 pb-3">
         <div className="mx-auto flex w-full max-w-md items-center justify-between rounded-[26px] border border-white/80 bg-white/95 p-2 shadow-[0_-8px_35px_rgba(15,23,42,0.12)] backdrop-blur-xl">
-          {navigationItems.map(
-            (item) => {
-              const isActive =
-                item.href === "/"
-                  ? pathname === "/"
-                  : pathname ===
-                      item.href ||
-                    pathname.startsWith(
-                      `${item.href}/`
-                    );
+          {navigationItems.map((item) => {
+            const isActive =
+              item.href === "/"
+                ? pathname === "/"
+                : pathname === item.href ||
+                  pathname.startsWith(
+                    `${item.href}/`
+                  );
 
-              return (
-                <Link
-                  key={item.href}
-                  href={item.href}
-                  className={`flex min-w-0 flex-1 flex-col items-center justify-center rounded-[20px] px-2 py-2.5 transition-all duration-200 ${
+            return (
+              <Link
+                key={item.href}
+                href={item.href}
+                className={`flex min-w-0 flex-1 flex-col items-center justify-center rounded-[20px] px-2 py-2.5 transition-all duration-200 ${
+                  isActive
+                    ? "bg-purple-600 text-white shadow-lg shadow-purple-200"
+                    : "text-slate-400 hover:bg-slate-50 hover:text-purple-600"
+                }`}
+              >
+                <span
+                  className={`flex h-7 w-7 items-center justify-center rounded-full text-lg font-black ${
                     isActive
-                      ? "bg-purple-600 text-white shadow-lg shadow-purple-200"
-                      : "text-slate-400 hover:bg-slate-50 hover:text-purple-600"
+                      ? "bg-white/15"
+                      : ""
                   }`}
                 >
-                  <span
-                    className={`flex h-7 w-7 items-center justify-center rounded-full text-lg font-black ${
-                      isActive
-                        ? "bg-white/15"
-                        : ""
-                    }`}
-                  >
-                    {item.icon}
-                  </span>
+                  {item.icon}
+                </span>
 
-                  <span
-                    className={`mt-1 text-[10px] font-black ${
-                      isActive
-                        ? "text-white"
-                        : "text-slate-500"
-                    }`}
-                  >
-                    {item.label}
-                  </span>
-                </Link>
-              );
-            }
-          )}
+                <span
+                  className={`mt-1 text-[10px] font-black ${
+                    isActive
+                      ? "text-white"
+                      : "text-slate-500"
+                  }`}
+                >
+                  {item.label}
+                </span>
+              </Link>
+            );
+          })}
         </div>
       </nav>
     </main>
