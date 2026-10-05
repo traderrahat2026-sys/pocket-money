@@ -6,6 +6,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type ChangeEvent,
 } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -43,10 +44,7 @@ type Submission = {
   title?: string;
   reward_amount?: number;
   screenshot_url: string | null;
-  status:
-    | "pending"
-    | "approved"
-    | "rejected";
+  status: "pending" | "approved" | "rejected";
   admin_note: string | null;
   submitted_at: string;
   reviewed_at: string | null;
@@ -56,38 +54,22 @@ type Submission = {
 export default function TasksPage() {
   const router = useRouter();
 
-  const [tasks, setTasks] =
-    useState<Task[]>([]);
+  const [tasks, setTasks] = useState<Task[]>([]);
+  const [submissions, setSubmissions] = useState<Submission[]>([]);
 
-  const [submissions, setSubmissions] =
-    useState<Submission[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
 
-  const [loading, setLoading] =
-    useState(true);
+  const [selectedTask, setSelectedTask] = useState<Task | null>(null);
+  const [showUploadModal, setShowUploadModal] = useState(false);
 
-  const [refreshing, setRefreshing] =
-    useState(false);
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [uploading, setUploading] = useState(false);
 
-  const [selectedTask, setSelectedTask] =
-    useState<Task | null>(null);
+  const [message, setMessage] = useState<string | null>(null);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-  const [showUploadModal, setShowUploadModal] =
-    useState(false);
-
-  const [selectedFile, setSelectedFile] =
-    useState<File | null>(null);
-
-  const [uploading, setUploading] =
-    useState(false);
-
-  const [message, setMessage] =
-    useState<string | null>(null);
-
-  const [errorMessage, setErrorMessage] =
-    useState<string | null>(null);
-
-  const cycleRefreshLock =
-    useRef(false);
+  const cycleRefreshLock = useRef(false);
 
   /*
    * ============================================================
@@ -111,18 +93,12 @@ export default function TasksPage() {
          */
 
         const {
-          data: {
-            user,
-          },
+          data: { user },
           error: userError,
-        } =
-          await supabase.auth.getUser();
+        } = await supabase.auth.getUser();
 
         if (userError) {
-          console.error(
-            "TASK USER ERROR:",
-            userError
-          );
+          console.error("TASK USER ERROR:", userError);
         }
 
         if (!user) {
@@ -135,26 +111,13 @@ export default function TasksPage() {
         /*
          * ======================================================
          * GET TASKS
-         *
-         * IMPORTANT:
-         * get_my_tasks() returns GLOBAL TASKS that the current
-         * user is eligible for.
-         *
-         * We do NOT trust submission_status from this RPC for
-         * frontend availability.
-         *
-         * Submission state will be calculated ONLY from
-         * get_my_task_submissions(), which is user-specific.
          * ======================================================
          */
 
         const {
           data: loadedTasks,
           error: tasksError,
-        } =
-          await supabase.rpc(
-            "get_my_tasks"
-          );
+        } = await supabase.rpc("get_my_tasks");
 
         if (tasksError) {
           console.error(
@@ -167,19 +130,16 @@ export default function TasksPage() {
 
         /*
          * ======================================================
-         * GET CURRENT USER'S COMPLETE SUBMISSION HISTORY
+         * GET CURRENT USER SUBMISSIONS
          * ======================================================
          */
 
         const {
-          data:
-            loadedSubmissions,
-          error:
-            submissionsError,
-        } =
-          await supabase.rpc(
-            "get_my_task_submissions"
-          );
+          data: loadedSubmissions,
+          error: submissionsError,
+        } = await supabase.rpc(
+          "get_my_task_submissions"
+        );
 
         if (submissionsError) {
           console.error(
@@ -192,212 +152,342 @@ export default function TasksPage() {
 
         /*
          * ======================================================
-         * NORMALIZE SUBMISSIONS FIRST
+         * NORMALIZE SUBMISSIONS
          * ======================================================
          */
 
-        const normalizedSubmissions: Submission[] =
-          (
-            loadedSubmissions ?? []
-          ).map(
-            (submission: any) => ({
-              id:
-                String(
-                  submission.id
-                ),
+        const normalizedSubmissions: Submission[] = [];
 
-              task_id:
-                String(
-                  submission.task_id
-                ),
+        for (const rawSubmission of loadedSubmissions ?? []) {
+          const submission: any = rawSubmission;
 
-              package_amount:
-                submission.package_amount !=
-                null
-                  ? Number(
-                      submission.package_amount
-                    )
-                  : undefined,
+          if (!submission?.id) {
+            continue;
+          }
 
-              title:
-                submission.title ??
-                undefined,
+          normalizedSubmissions.push({
+            id: String(submission.id),
 
-              reward_amount:
-                submission.reward_amount !=
-                null
-                  ? Number(
-                      submission.reward_amount
-                    )
-                  : undefined,
+            task_id: String(
+              submission.task_id ?? ""
+            ),
 
-              screenshot_url:
-                submission.screenshot_url ??
-                null,
+            package_amount:
+              submission.package_amount != null
+                ? Number(
+                    submission.package_amount
+                  )
+                : undefined,
 
-              status:
-                submission.status ===
-                  "pending" ||
-                submission.status ===
-                  "approved" ||
-                submission.status ===
-                  "rejected"
-                  ? submission.status
-                  : "pending",
+            title:
+              submission.title != null
+                ? String(submission.title)
+                : undefined,
 
-              admin_note:
-                submission.admin_note ??
-                null,
+            reward_amount:
+              submission.reward_amount != null
+                ? Number(
+                    submission.reward_amount
+                  )
+                : undefined,
 
-              submitted_at:
-                submission.submitted_at ??
-                "",
+            screenshot_url:
+              submission.screenshot_url != null
+                ? String(
+                    submission.screenshot_url
+                  )
+                : null,
 
-              reviewed_at:
-                submission.reviewed_at ??
-                null,
+            status:
+              submission.status === "pending" ||
+              submission.status === "approved" ||
+              submission.status === "rejected"
+                ? submission.status
+                : "pending",
 
-              cycle_started_at:
-                submission.cycle_started_at ??
-                "",
-            })
-          );
+            admin_note:
+              submission.admin_note != null
+                ? String(
+                    submission.admin_note
+                  )
+                : null,
+
+            submitted_at:
+              submission.submitted_at != null
+                ? String(
+                    submission.submitted_at
+                  )
+                : "",
+
+            reviewed_at:
+              submission.reviewed_at != null
+                ? String(
+                    submission.reviewed_at
+                  )
+                : null,
+
+            cycle_started_at:
+              submission.cycle_started_at != null
+                ? String(
+                    submission.cycle_started_at
+                  )
+                : "",
+          });
+        }
 
         /*
          * ======================================================
          * NORMALIZE TASKS
          * ======================================================
+         *
+         * IMPORTANT:
+         *
+         * Admin OFF:
+         * is_active = false
+         *
+         * The task is completely removed from the frontend.
+         *
+         * ======================================================
          */
 
-        const normalizedTasks: Task[] =
-          (loadedTasks ?? []).map(
-            (task: any) => {
-              const cycleStartedAt =
-                task.cycle_started_at ??
-                "";
+        const normalizedTasks: Task[] = [];
 
-              let expiresAt =
-                task.expires_at ??
-                "";
+        for (const rawTask of loadedTasks ?? []) {
+          const task: any = rawTask;
 
-              /*
-               * Fallback expiry calculation
-               */
+          if (!task?.id) {
+            continue;
+          }
 
-              if (
-                !expiresAt &&
+          /*
+           * ====================================================
+           * ACTIVE CHECK
+           * ====================================================
+           */
+
+          const taskIsActive =
+            task.is_active === true ||
+            task.is_active === "true" ||
+            task.is_active === 1;
+
+          /*
+           * Admin OFF হলে task দেখাবো না।
+           */
+
+          if (!taskIsActive) {
+            continue;
+          }
+
+          /*
+           * ====================================================
+           * CYCLE
+           * ====================================================
+           */
+
+          const cycleStartedAt =
+            task.cycle_started_at != null
+              ? String(
+                  task.cycle_started_at
+                )
+              : "";
+
+          /*
+           * ====================================================
+           * EXPIRY
+           * ====================================================
+           */
+
+          let expiresAt =
+            task.expires_at != null
+              ? String(task.expires_at)
+              : "";
+
+          /*
+           * expires_at না থাকলে cycle start থেকে 24 hours
+           */
+
+          if (
+            !expiresAt &&
+            cycleStartedAt
+          ) {
+            const cycleTime =
+              new Date(
                 cycleStartedAt
-              ) {
-                const cycleTime =
-                  new Date(
-                    cycleStartedAt
-                  ).getTime();
+              ).getTime();
 
-                if (
-                  !Number.isNaN(
-                    cycleTime
-                  )
-                ) {
-                  expiresAt =
-                    new Date(
-                      cycleTime +
-                        24 *
-                          60 *
-                          60 *
-                          1000
-                    ).toISOString();
-                }
-              }
-
-              /*
-               * =================================================
-               * IMPORTANT:
-               *
-               * DO NOT use task.submission_status here.
-               *
-               * It is intentionally set to null.
-               *
-               * Current user's submission will be found by
-               * getSubmission() below using the submission list
-               * returned for auth.uid().
-               * =================================================
-               */
-
-              return {
-                id:
-                  String(
-                    task.id
-                  ),
-
-                package_amount:
-                  Number(
-                    task.package_amount ??
-                      0
-                  ),
-
-                title:
-                  task.title ??
-                  "কাজ",
-
-                description:
-                  task.description ??
-                  null,
-
-                task_url:
-                  task.task_url ??
-                  "",
-
-                reward_amount:
-                  Number(
-                    task.reward_amount ??
-                      0
-                  ),
-
-                screenshot_required:
-                  Boolean(
-                    task.screenshot_required
-                  ),
-
-                is_active:
-                  Boolean(
-                    task.is_active
-                  ),
-
-                created_at:
-                  task.created_at ??
-                  "",
-
-                expires_at:
-                  expiresAt,
-
-                remaining_seconds:
-                  Math.max(
-                    0,
-                    Number(
-                      task.remaining_seconds ??
-                        0
-                    )
-                  ),
-
-                submission_status:
-                  null,
-
-                cycle_started_at:
-                  cycleStartedAt,
-              };
+            if (!Number.isNaN(cycleTime)) {
+              expiresAt =
+                new Date(
+                  cycleTime +
+                    24 *
+                      60 *
+                      60 *
+                      1000
+                ).toISOString();
             }
+          }
+
+          /*
+           * ====================================================
+           * REMAINING TIME
+           * ====================================================
+           */
+
+          let remainingSeconds = Number(
+            task.remaining_seconds ?? 0
+          );
+
+          if (
+            (!remainingSeconds ||
+              Number.isNaN(
+                remainingSeconds
+              )) &&
+            expiresAt
+          ) {
+            const expiryTime =
+              new Date(
+                expiresAt
+              ).getTime();
+
+            if (
+              !Number.isNaN(
+                expiryTime
+              )
+            ) {
+              remainingSeconds =
+                Math.max(
+                  0,
+                  Math.floor(
+                    (expiryTime -
+                      Date.now()) /
+                      1000
+                  )
+                );
+            }
+          }
+
+          /*
+           * ====================================================
+           * ADD ACTIVE TASK
+           * ====================================================
+           */
+
+          normalizedTasks.push({
+            id: String(task.id),
+
+            package_amount: Number(
+              task.package_amount ?? 0
+            ),
+
+            title:
+              task.title != null &&
+              String(
+                task.title
+              ).trim() !== ""
+                ? String(task.title)
+                : "কাজ",
+
+            description:
+              task.description != null
+                ? String(
+                    task.description
+                  )
+                : null,
+
+            task_url:
+              task.task_url != null
+                ? String(
+                    task.task_url
+                  )
+                : "",
+
+            reward_amount: Number(
+              task.reward_amount ?? 0
+            ),
+
+            screenshot_required:
+              task.screenshot_required ===
+                true ||
+              task.screenshot_required ===
+                "true" ||
+              task.screenshot_required ===
+                1,
+
+            is_active: true,
+
+            created_at:
+              task.created_at != null
+                ? String(
+                    task.created_at
+                  )
+                : "",
+
+            expires_at: expiresAt,
+
+            remaining_seconds: Math.max(
+              0,
+              Number.isFinite(
+                remainingSeconds
+              )
+                ? Math.floor(
+                    remainingSeconds
+                  )
+                : 0
+            ),
+
+            submission_status: null,
+
+            cycle_started_at:
+              cycleStartedAt,
+          });
+        }
+
+        /*
+         * ======================================================
+         * REMOVE DUPLICATE TASKS
+         * ======================================================
+         */
+
+        const uniqueTaskMap =
+          new Map<string, Task>();
+
+        for (const task of normalizedTasks) {
+          if (
+            !uniqueTaskMap.has(
+              task.id
+            )
+          ) {
+            uniqueTaskMap.set(
+              task.id,
+              task
+            );
+          }
+        }
+
+        const finalTasks =
+          Array.from(
+            uniqueTaskMap.values()
           );
 
         /*
          * ======================================================
-         * SAVE STATE
+         * SORT BY PACKAGE
          * ======================================================
          */
 
-        setTasks(
-          normalizedTasks
+        finalTasks.sort(
+          (a, b) =>
+            a.package_amount -
+            b.package_amount
         );
 
+        /*
+         * ======================================================
+         * SAVE
+         * ======================================================
+         */
+
+        setTasks(finalTasks);
         setSubmissions(
           normalizedSubmissions
         );
@@ -406,6 +496,8 @@ export default function TasksPage() {
           "LOAD TASKS ERROR:",
           error
         );
+
+        setTasks([]);
 
         setErrorMessage(
           error?.message ||
@@ -430,7 +522,7 @@ export default function TasksPage() {
 
   /*
    * ============================================================
-   * LOCK BODY SCROLL WHILE UPLOAD MODAL IS OPEN
+   * BODY SCROLL LOCK
    * ============================================================
    */
 
@@ -464,10 +556,7 @@ export default function TasksPage() {
 
   /*
    * ============================================================
-   * GET CURRENT GLOBAL CYCLE START
-   *
-   * The cycle itself is GLOBAL.
-   * Submission belongs to USER + TASK + CYCLE.
+   * GET CURRENT CYCLE START
    * ============================================================
    */
 
@@ -498,17 +587,7 @@ export default function TasksPage() {
 
   /*
    * ============================================================
-   * FIND CURRENT USER'S SUBMISSION FOR CURRENT CYCLE
-   *
-   * IMPORTANT:
-   *
-   * submissions comes from:
-   *
-   * get_my_task_submissions()
-   *
-   * which already uses auth.uid().
-   *
-   * Therefore another user's submission can NEVER be used here.
+   * GET CURRENT USER SUBMISSION
    * ============================================================
    */
 
@@ -527,15 +606,23 @@ export default function TasksPage() {
           return null;
         }
 
-        const currentCycleSubmission =
+        const currentSubmission =
           submissions.find(
             (submission) => {
+              /*
+               * Same task
+               */
+
               if (
                 submission.task_id !==
                 task.id
               ) {
                 return false;
               }
+
+              /*
+               * Must have cycle
+               */
 
               if (
                 !submission.cycle_started_at
@@ -556,6 +643,10 @@ export default function TasksPage() {
                 return false;
               }
 
+              /*
+               * Same global cycle
+               */
+
               return (
                 submissionCycle ===
                 currentCycleStart
@@ -564,8 +655,7 @@ export default function TasksPage() {
           );
 
         return (
-          currentCycleSubmission ??
-          null
+          currentSubmission ?? null
         );
       },
       [
@@ -587,10 +677,10 @@ export default function TasksPage() {
 
     const timer =
       setInterval(() => {
-        const now =
-          Date.now();
+        const now = Date.now();
 
-        let cycleEnded = false;
+        let cycleEnded =
+          false;
 
         setTasks(
           (currentTasks) =>
@@ -619,10 +709,9 @@ export default function TasksPage() {
                   Math.max(
                     0,
                     Math.floor(
-                      (
-                        expiresAt -
-                        now
-                      ) / 1000
+                      (expiresAt -
+                        now) /
+                        1000
                     )
                   );
 
@@ -635,7 +724,6 @@ export default function TasksPage() {
 
                 return {
                   ...task,
-
                   remaining_seconds:
                     remainingSeconds,
                 };
@@ -644,7 +732,7 @@ export default function TasksPage() {
         );
 
         /*
-         * Reload once when cycle ends.
+         * Cycle শেষ হলে reload
          */
 
         if (
@@ -665,8 +753,9 @@ export default function TasksPage() {
         }
       }, 1000);
 
-    return () =>
+    return () => {
       clearInterval(timer);
+    };
   }, [
     tasks.length,
     loadTasks,
@@ -674,13 +763,14 @@ export default function TasksPage() {
 
   /*
    * ============================================================
-   * ADMIN GLOBAL REFRESH DETECTION
+   * ADMIN TASK REFRESH
    * ============================================================
    *
-   * If Admin activates/deactivates a task, the page refreshes
-   * the task list.
+   * প্রতি 10 seconds-এ database থেকে task আবার check হবে।
    *
-   * This does NOT make submissions global.
+   * Admin OFF করলে task disappear করবে।
+   * Admin ON করলে eligible task আবার আসবে।
+   *
    * ============================================================
    */
 
@@ -710,10 +800,9 @@ export default function TasksPage() {
         );
       }, 10000);
 
-    return () =>
-      clearInterval(
-        interval
-      );
+    return () => {
+      clearInterval(interval);
+    };
   }, [
     loading,
     loadTasks,
@@ -734,7 +823,9 @@ export default function TasksPage() {
 
         await loadTasks(false);
       } catch {
-        // loadTasks already handles error state.
+        /*
+         * loadTasks already handles error
+         */
       } finally {
         setRefreshing(false);
       }
@@ -742,7 +833,7 @@ export default function TasksPage() {
 
   /*
    * ============================================================
-   * FORMAT MONEY
+   * MONEY FORMAT
    * ============================================================
    */
 
@@ -751,15 +842,17 @@ export default function TasksPage() {
       return new Intl.NumberFormat(
         "en-BD"
       ).format(
-        Number(
-          amount || 0
+        Number.isFinite(
+          Number(amount)
         )
+          ? Number(amount)
+          : 0
       );
     };
 
   /*
    * ============================================================
-   * FORMAT COUNTDOWN
+   * COUNTDOWN FORMAT
    * ============================================================
    */
 
@@ -769,22 +862,22 @@ export default function TasksPage() {
         Math.max(
           0,
           Math.floor(
-            seconds
+            Number.isFinite(
+              Number(seconds)
+            )
+              ? Number(seconds)
+              : 0
           )
         );
 
       const hours =
         Math.floor(
-          safeSeconds /
-            3600
+          safeSeconds / 3600
         );
 
       const minutes =
         Math.floor(
-          (
-            safeSeconds %
-            3600
-          ) /
+          (safeSeconds % 3600) /
             60
         );
 
@@ -792,23 +885,15 @@ export default function TasksPage() {
         safeSeconds % 60;
 
       return [
-        String(
-          hours
-        ).padStart(
+        String(hours).padStart(
           2,
           "0"
         ),
-
-        String(
-          minutes
-        ).padStart(
+        String(minutes).padStart(
           2,
           "0"
         ),
-
-        String(
-          secs
-        ).padStart(
+        String(secs).padStart(
           2,
           "0"
         ),
@@ -822,20 +907,28 @@ export default function TasksPage() {
    */
 
   const handleStartTask =
-    async (
-      task: Task
-    ) => {
+    async (task: Task) => {
       setMessage(null);
       setErrorMessage(null);
 
       /*
-       * Only THIS USER'S submission is checked.
+       * Extra active check
+       */
+
+      if (!task.is_active) {
+        setErrorMessage(
+          "এই কাজটি বর্তমানে Admin-এর মাধ্যমে বন্ধ করা হয়েছে।"
+        );
+
+        return;
+      }
+
+      /*
+       * Current user's submission
        */
 
       const submission =
-        getSubmission(
-          task
-        );
+        getSubmission(task);
 
       if (submission) {
         setMessage(
@@ -862,25 +955,33 @@ export default function TasksPage() {
 
   /*
    * ============================================================
-   * OPEN SUBMISSION POPUP
+   * OPEN SUBMISSION
    * ============================================================
    */
 
   const openSubmission =
-    (
-      task: Task
-    ) => {
+    (task: Task) => {
       setMessage(null);
       setErrorMessage(null);
 
       /*
-       * Only THIS USER'S current-cycle submission is checked.
+       * Active check
+       */
+
+      if (!task.is_active) {
+        setErrorMessage(
+          "এই কাজটি বর্তমানে Admin-এর মাধ্যমে বন্ধ করা হয়েছে।"
+        );
+
+        return;
+      }
+
+      /*
+       * Current user's submission
        */
 
       const submission =
-        getSubmission(
-          task
-        );
+        getSubmission(task);
 
       if (submission) {
         setMessage(
@@ -890,22 +991,14 @@ export default function TasksPage() {
         return;
       }
 
-      setSelectedTask(
-        task
-      );
-
-      setSelectedFile(
-        null
-      );
-
-      setShowUploadModal(
-        true
-      );
+      setSelectedTask(task);
+      setSelectedFile(null);
+      setShowUploadModal(true);
     };
 
   /*
    * ============================================================
-   * CLOSE POPUP
+   * CLOSE MODAL
    * ============================================================
    */
 
@@ -915,21 +1008,10 @@ export default function TasksPage() {
         return;
       }
 
-      setShowUploadModal(
-        false
-      );
-
-      setSelectedTask(
-        null
-      );
-
-      setSelectedFile(
-        null
-      );
-
-      setErrorMessage(
-        null
-      );
+      setShowUploadModal(false);
+      setSelectedTask(null);
+      setSelectedFile(null);
+      setErrorMessage(null);
     };
 
   /*
@@ -938,77 +1020,60 @@ export default function TasksPage() {
    * ============================================================
    */
 
-  const handleFileChange =
-    (
-      event: React.ChangeEvent<HTMLInputElement>
-    ) => {
-      const file =
-        event.target.files?.[0] ??
-        null;
+  const handleFileChange = (
+    event: ChangeEvent<HTMLInputElement>
+  ) => {
+    const file =
+      event.target.files?.[0] ??
+      null;
 
-      if (!file) {
-        setSelectedFile(
-          null
-        );
+    if (!file) {
+      setSelectedFile(null);
+      return;
+    }
 
-        return;
-      }
+    /*
+     * Image only
+     */
 
-      /*
-       * Image validation
-       */
-
-      if (
-        !file.type.startsWith(
-          "image/"
-        )
-      ) {
-        setSelectedFile(
-          null
-        );
-
-        setErrorMessage(
-          "শুধু Image Screenshot নির্বাচন করুন।"
-        );
-
-        event.target.value =
-          "";
-
-        return;
-      }
-
-      /*
-       * 10MB maximum
-       */
-
-      if (
-        file.size >
-        10 *
-          1024 *
-          1024
-      ) {
-        setSelectedFile(
-          null
-        );
-
-        setErrorMessage(
-          "Screenshot-এর size সর্বোচ্চ 10MB হতে পারবে।"
-        );
-
-        event.target.value =
-          "";
-
-        return;
-      }
-
-      setSelectedFile(
-        file
-      );
+    if (
+      !file.type.startsWith(
+        "image/"
+      )
+    ) {
+      setSelectedFile(null);
 
       setErrorMessage(
-        null
+        "শুধু Image Screenshot নির্বাচন করুন।"
       );
-    };
+
+      event.target.value = "";
+
+      return;
+    }
+
+    /*
+     * 10MB maximum
+     */
+
+    if (
+      file.size >
+      10 * 1024 * 1024
+    ) {
+      setSelectedFile(null);
+
+      setErrorMessage(
+        "Screenshot-এর size সর্বোচ্চ 10MB হতে পারবে।"
+      );
+
+      event.target.value = "";
+
+      return;
+    }
+
+    setSelectedFile(file);
+    setErrorMessage(null);
+  };
 
   /*
    * ============================================================
@@ -1030,13 +1095,19 @@ export default function TasksPage() {
       setErrorMessage(null);
 
       /*
-       * ======================================================
-       * FRONTEND CURRENT USER CHECK
-       * ======================================================
-       *
-       * This checks only this user's submission history.
-       * Another user's submission cannot affect this.
-       * ======================================================
+       * Active check
+       */
+
+      if (!selectedTask.is_active) {
+        setErrorMessage(
+          "এই কাজটি বর্তমানে Admin-এর মাধ্যমে বন্ধ করা হয়েছে।"
+        );
+
+        return;
+      }
+
+      /*
+       * Current user's current-cycle submission
        */
 
       const currentSubmission =
@@ -1053,9 +1124,7 @@ export default function TasksPage() {
       }
 
       /*
-       * ======================================================
-       * SCREENSHOT REQUIRED
-       * ======================================================
+       * Screenshot required
        */
 
       if (
@@ -1070,9 +1139,7 @@ export default function TasksPage() {
       }
 
       try {
-        setUploading(
-          true
-        );
+        setUploading(true);
 
         /*
          * ====================================================
@@ -1081,13 +1148,9 @@ export default function TasksPage() {
          */
 
         const {
-          data: {
-            user,
-          },
-          error:
-            userError,
-        } =
-          await supabase.auth.getUser();
+          data: { user },
+          error: userError,
+        } = await supabase.auth.getUser();
 
         if (
           userError ||
@@ -1097,13 +1160,9 @@ export default function TasksPage() {
             "আপনার Login session পাওয়া যায়নি। আবার Login করুন।"
           );
 
-          setUploading(
-            false
-          );
+          setUploading(false);
 
-          router.push(
-            "/login"
-          );
+          router.push("/login");
 
           return;
         }
@@ -1114,7 +1173,7 @@ export default function TasksPage() {
 
         /*
          * ====================================================
-         * UPLOAD SCREENSHOT
+         * SCREENSHOT UPLOAD
          * ====================================================
          */
 
@@ -1126,25 +1185,23 @@ export default function TasksPage() {
               ?.toLowerCase() ||
             "jpg";
 
-          const safeExtension =
-            [
-              "jpg",
-              "jpeg",
-              "png",
-              "webp",
-            ].includes(
-              extension
-            )
-              ? extension
-              : "jpg";
+          const safeExtension = [
+            "jpg",
+            "jpeg",
+            "png",
+            "webp",
+          ].includes(
+            extension
+          )
+            ? extension
+            : "jpg";
 
           const fileName =
             `${user.id}/${selectedTask.id}/${Date.now()}.${safeExtension}`;
 
           try {
             const {
-              error:
-                uploadError,
+              error: uploadError,
             } =
               await supabase.storage
                 .from(
@@ -1156,19 +1213,14 @@ export default function TasksPage() {
                   {
                     cacheControl:
                       "3600",
-
-                    upsert:
-                      false,
-
+                    upsert: false,
                     contentType:
                       selectedFile.type ||
                       "image/jpeg",
                   }
                 );
 
-            if (
-              uploadError
-            ) {
+            if (uploadError) {
               console.error(
                 "SCREENSHOT UPLOAD ERROR:",
                 uploadError
@@ -1180,7 +1232,7 @@ export default function TasksPage() {
             storageError: any
           ) {
             console.error(
-              "STORAGE FETCH ERROR:",
+              "STORAGE ERROR:",
               storageError
             );
 
@@ -1206,9 +1258,12 @@ export default function TasksPage() {
             );
           }
 
+          /*
+           * Public URL
+           */
+
           const {
-            data:
-              publicUrlData,
+            data: publicUrlData,
           } =
             supabase.storage
               .from(
@@ -1219,13 +1274,10 @@ export default function TasksPage() {
               );
 
           screenshotUrl =
-            publicUrlData
-              ?.publicUrl ??
+            publicUrlData?.publicUrl ??
             null;
 
-          if (
-            !screenshotUrl
-          ) {
+          if (!screenshotUrl) {
             throw new Error(
               "Screenshot-এর URL পাওয়া যায়নি।"
             );
@@ -1236,16 +1288,6 @@ export default function TasksPage() {
          * ====================================================
          * DATABASE SUBMISSION
          * ====================================================
-         *
-         * submit_package_task() itself uses auth.uid().
-         *
-         * Database unique key:
-         *
-         * (user_id, task_id, cycle_started_at)
-         *
-         * Therefore multiple users can submit the same task
-         * during the same global cycle.
-         * ====================================================
          */
 
         let submissionId:
@@ -1255,8 +1297,7 @@ export default function TasksPage() {
         try {
           const {
             data,
-            error:
-              submitError,
+            error: submitError,
           } =
             await supabase.rpc(
               "submit_package_task",
@@ -1269,9 +1310,7 @@ export default function TasksPage() {
               }
             );
 
-          if (
-            submitError
-          ) {
+          if (submitError) {
             console.error(
               "SUBMIT TASK ERROR:",
               submitError
@@ -1280,15 +1319,18 @@ export default function TasksPage() {
             throw submitError;
           }
 
-          submissionId =
-            data
-              ? String(data)
-              : null;
+          if (
+            data !== null &&
+            data !== undefined
+          ) {
+            submissionId =
+              String(data);
+          }
         } catch (
           rpcError: any
         ) {
           console.error(
-            "RPC FETCH ERROR:",
+            "SUBMIT RPC ERROR:",
             rpcError
           );
 
@@ -1311,6 +1353,12 @@ export default function TasksPage() {
           throw rpcError;
         }
 
+        /*
+         * ====================================================
+         * VERIFY
+         * ====================================================
+         */
+
         if (!submissionId) {
           throw new Error(
             "Submission ID পাওয়া যায়নি।"
@@ -1319,39 +1367,24 @@ export default function TasksPage() {
 
         /*
          * ====================================================
-         * CLOSE POPUP
+         * CLOSE
          * ====================================================
          */
 
-        setShowUploadModal(
-          false
-        );
-
-        setSelectedTask(
-          null
-        );
-
-        setSelectedFile(
-          null
-        );
-
-        setErrorMessage(
-          null
-        );
+        setShowUploadModal(false);
+        setSelectedTask(null);
+        setSelectedFile(null);
+        setErrorMessage(null);
 
         setMessage(
           "কাজ সফলভাবে জমা হয়েছে। Admin যাচাই করার পর Reward যোগ হবে।"
         );
 
         /*
-         * ====================================================
-         * RELOAD USER-SPECIFIC DATABASE STATE
-         * ====================================================
+         * Reload
          */
 
-        await loadTasks(
-          false
-        );
+        await loadTasks(false);
       } catch (error: any) {
         console.error(
           "HANDLE SUBMIT ERROR:",
@@ -1359,17 +1392,10 @@ export default function TasksPage() {
         );
 
         const errorText =
-          error?.message ||
-          "";
+          error?.message || "";
 
         const normalizedError =
           errorText.toLowerCase();
-
-        /*
-         * ====================================================
-         * FRIENDLY ERROR
-         * ====================================================
-         */
 
         if (
           normalizedError.includes(
@@ -1440,15 +1466,13 @@ export default function TasksPage() {
           );
         }
       } finally {
-        setUploading(
-          false
-        );
+        setUploading(false);
       }
     };
 
   /*
    * ============================================================
-   * TASK COUNTS
+   * COUNTS
    * ============================================================
    */
 
@@ -1470,14 +1494,18 @@ export default function TasksPage() {
     useMemo(() => {
       return tasks.filter(
         (task) =>
-          !getSubmission(
-            task
-          )
+          !getSubmission(task)
       ).length;
     }, [
       tasks,
       getSubmission,
     ]);
+
+  /*
+   * Prevent unused variable build/lint issue.
+   */
+
+  void pendingCount;
 
   /*
    * ============================================================
@@ -1490,7 +1518,6 @@ export default function TasksPage() {
       <Header />
 
       <main className="mx-auto w-full max-w-3xl px-4 pt-5">
-
         {/* ================================================== */}
         {/* HEADER */}
         {/* ================================================== */}
@@ -1508,12 +1535,8 @@ export default function TasksPage() {
 
           <button
             type="button"
-            onClick={
-              handleRefresh
-            }
-            disabled={
-              refreshing
-            }
+            onClick={handleRefresh}
+            disabled={refreshing}
             className="rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-sm font-semibold text-slate-200 transition hover:bg-slate-800 disabled:opacity-50"
           >
             {refreshing
@@ -1634,9 +1657,12 @@ export default function TasksPage() {
               {tasks.map(
                 (task) => {
                   /*
-                   * IMPORTANT:
-                   * submission is ONLY current user's submission.
+                   * Final safety check.
                    */
+
+                  if (!task.is_active) {
+                    return null;
+                  }
 
                   const submission =
                     getSubmission(
@@ -1649,30 +1675,23 @@ export default function TasksPage() {
                     );
 
                   const isPending =
-                    submission
-                      ?.status ===
+                    submission?.status ===
                     "pending";
 
                   const isApproved =
-                    submission
-                      ?.status ===
+                    submission?.status ===
                     "approved";
 
                   const isRejected =
-                    submission
-                      ?.status ===
+                    submission?.status ===
                     "rejected";
 
                   return (
                     <div
-                      key={
-                        task.id
-                      }
+                      key={task.id}
                       className="overflow-hidden rounded-3xl border border-slate-800 bg-slate-900 shadow-lg shadow-black/20"
                     >
-                      {/* ========================================= */}
                       {/* TASK TOP */}
-                      {/* ========================================= */}
 
                       <div className="border-b border-slate-800 p-5">
                         <div className="flex items-start justify-between gap-4">
@@ -1682,19 +1701,17 @@ export default function TasksPage() {
                               {formatMoney(
                                 task.package_amount
                               )}{" "}
-                              PACKAGE
+                              প্যাকেজ
                             </div>
 
                             <h2 className="text-lg font-bold leading-7">
-                              {
-                                task.title
-                              }
+                              {task.title}
                             </h2>
                           </div>
 
                           <div className="shrink-0 text-right">
                             <p className="text-xs text-slate-500">
-                              Reward
+                              রিওয়ার্ড
                             </p>
 
                             <p className="text-lg font-extrabold text-emerald-400">
@@ -1708,16 +1725,12 @@ export default function TasksPage() {
 
                         {task.description && (
                           <p className="mt-3 text-sm leading-6 text-slate-400">
-                            {
-                              task.description
-                            }
+                            {task.description}
                           </p>
                         )}
                       </div>
 
-                      {/* ========================================= */}
-                      {/* CURRENT GLOBAL CYCLE */}
-                      {/* ========================================= */}
+                      {/* CURRENT CYCLE */}
 
                       <div className="p-5">
                         <div className="mb-4 rounded-2xl border border-slate-800 bg-slate-950/70 p-4">
@@ -1740,9 +1753,7 @@ export default function TasksPage() {
                           </div>
                         </div>
 
-                        {/* ========================================= */}
                         {/* SUBMISSION STATUS */}
-                        {/* ========================================= */}
 
                         {submittedThisCycle && (
                           <div
@@ -1799,9 +1810,7 @@ export default function TasksPage() {
                           </div>
                         )}
 
-                        {/* ========================================= */}
                         {/* ACTION BUTTONS */}
-                        {/* ========================================= */}
 
                         {!submittedThisCycle && (
                           <div className="grid grid-cols-2 gap-3">
@@ -1853,7 +1862,7 @@ export default function TasksPage() {
             <div className="mt-8">
               <div className="mb-4">
                 <h2 className="text-xl font-bold">
-                  Submission History
+                  জমা দেওয়ার ইতিহাস
                 </h2>
 
                 <p className="mt-1 text-sm text-slate-500">
@@ -1863,13 +1872,9 @@ export default function TasksPage() {
 
               <div className="space-y-3">
                 {submissions.map(
-                  (
-                    submission
-                  ) => (
+                  (submission) => (
                     <div
-                      key={
-                        submission.id
-                      }
+                      key={submission.id}
                       className="rounded-2xl border border-slate-800 bg-slate-900 p-4"
                     >
                       <div className="flex items-start justify-between gap-4">
@@ -1880,7 +1885,7 @@ export default function TasksPage() {
                           </p>
 
                           <p className="mt-1 text-xs text-slate-500">
-                            Package: ৳
+                            প্যাকেজ: ৳
                             {formatMoney(
                               Number(
                                 submission.package_amount ||
@@ -1902,7 +1907,7 @@ export default function TasksPage() {
 
                           {submission.cycle_started_at && (
                             <p className="mt-1 text-xs text-slate-600">
-                              Cycle:{" "}
+                              সাইকেল:{" "}
                               {new Date(
                                 submission.cycle_started_at
                               ).toLocaleString(
@@ -1928,8 +1933,8 @@ export default function TasksPage() {
                             ? "অনুমোদিত"
                             : submission.status ===
                               "pending"
-                            ? "Pending"
-                            : "Rejected"}
+                            ? "যাচাই চলছে"
+                            : "প্রত্যাখ্যাত"}
                         </span>
                       </div>
 
@@ -1950,14 +1955,12 @@ export default function TasksPage() {
       </main>
 
       {/* ====================================================== */}
-      {/* PROOF UPLOAD POPUP */}
+      {/* PROOF UPLOAD MODAL */}
       {/* ====================================================== */}
 
       {showUploadModal &&
         selectedTask && (
           <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/80 p-3 sm:p-5">
-
-            {/* Popup */}
             <div
               className="flex w-full max-w-md flex-col overflow-hidden rounded-3xl border border-slate-700 bg-slate-900 shadow-2xl"
               style={{
@@ -1965,23 +1968,17 @@ export default function TasksPage() {
                   "calc(100dvh - 24px)",
               }}
             >
-
-              {/* ================================================= */}
               {/* POPUP HEADER */}
-              {/* ================================================= */}
 
               <div className="shrink-0 border-b border-slate-800 px-4 py-4 sm:px-5">
                 <div className="flex items-center justify-between gap-3">
-
                   <div className="min-w-0">
                     <h2 className="text-lg font-bold sm:text-xl">
                       প্রুফ আপলোড করুন
                     </h2>
 
                     <p className="mt-1 truncate text-xs text-slate-400 sm:text-sm">
-                      {
-                        selectedTask.title
-                      }
+                      {selectedTask.title}
                     </p>
                   </div>
 
@@ -1990,21 +1987,16 @@ export default function TasksPage() {
                     onClick={
                       closeUploadModal
                     }
-                    disabled={
-                      uploading
-                    }
+                    disabled={uploading}
                     className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-slate-800 text-lg text-slate-300 transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
                     aria-label="বন্ধ করুন"
                   >
                     ✕
                   </button>
-
                 </div>
               </div>
 
-              {/* ================================================= */}
               {/* POPUP CONTENT */}
-              {/* ================================================= */}
 
               <div
                 className="min-h-0 flex-1 overflow-y-auto px-4 py-4 sm:px-5 sm:py-5"
@@ -2013,13 +2005,12 @@ export default function TasksPage() {
                     "touch",
                 }}
               >
-
                 {/* REWARD */}
 
                 <div className="rounded-2xl border border-slate-800 bg-slate-950/70 p-4">
                   <div className="flex items-center justify-between gap-3">
                     <span className="text-sm text-slate-400">
-                      Reward
+                      রিওয়ার্ড
                     </span>
 
                     <span className="font-bold text-emerald-400">
@@ -2032,7 +2023,7 @@ export default function TasksPage() {
 
                   <div className="mt-3 flex items-center justify-between gap-3">
                     <span className="text-sm text-slate-400">
-                      Package
+                      প্যাকেজ
                     </span>
 
                     <span className="font-semibold text-white">
@@ -2048,13 +2039,11 @@ export default function TasksPage() {
 
                 {selectedTask.screenshot_required && (
                   <div className="mt-4">
-
                     <label className="mb-2 block text-sm font-semibold text-slate-200">
                       Screenshot
                     </label>
 
                     <label className="flex min-h-[145px] cursor-pointer flex-col items-center justify-center rounded-2xl border border-dashed border-slate-700 bg-slate-950/70 px-4 py-5 text-center transition hover:border-emerald-500/50">
-
                       <div className="text-3xl">
                         📷
                       </div>
@@ -2094,7 +2083,6 @@ export default function TasksPage() {
                           uploading
                         }
                       />
-
                     </label>
                   </div>
                 )}
@@ -2118,9 +2106,7 @@ export default function TasksPage() {
                 <div className="h-2" />
               </div>
 
-              {/* ================================================= */}
-              {/* POPUP ACTION BUTTONS */}
-              {/* ================================================= */}
+              {/* POPUP ACTIONS */}
 
               <div
                 className="shrink-0 border-t border-slate-800 bg-slate-900 px-4 pt-3 sm:px-5"
@@ -2129,11 +2115,7 @@ export default function TasksPage() {
                     "max(12px, env(safe-area-inset-bottom))",
                 }}
               >
-
                 <div className="grid grid-cols-2 gap-3">
-
-                  {/* CANCEL */}
-
                   <button
                     type="button"
                     onClick={
@@ -2147,8 +2129,6 @@ export default function TasksPage() {
                     বাতিল
                   </button>
 
-                  {/* SUBMIT */}
-
                   <button
                     type="button"
                     onClick={
@@ -2156,21 +2136,17 @@ export default function TasksPage() {
                     }
                     disabled={
                       uploading ||
-                      (
-                        selectedTask.screenshot_required &&
-                        !selectedFile
-                      )
+                      (selectedTask.screenshot_required &&
+                        !selectedFile)
                     }
                     className="min-h-[50px] rounded-xl bg-emerald-500 px-4 py-3 text-sm font-bold text-slate-950 transition hover:bg-emerald-400 active:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     {uploading
                       ? "জমা হচ্ছে..."
-                      : "Submit"}
+                      : "জমা দিন"}
                   </button>
-
                 </div>
               </div>
-
             </div>
           </div>
         )}
