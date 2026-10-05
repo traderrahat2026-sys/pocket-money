@@ -134,7 +134,17 @@ export default function TasksPage() {
 
         /*
          * ======================================================
-         * GET CURRENT GLOBAL-CYCLE TASKS
+         * GET TASKS
+         *
+         * IMPORTANT:
+         * get_my_tasks() returns GLOBAL TASKS that the current
+         * user is eligible for.
+         *
+         * We do NOT trust submission_status from this RPC for
+         * frontend availability.
+         *
+         * Submission state will be calculated ONLY from
+         * get_my_task_submissions(), which is user-specific.
          * ======================================================
          */
 
@@ -157,7 +167,7 @@ export default function TasksPage() {
 
         /*
          * ======================================================
-         * GET COMPLETE SUBMISSION HISTORY
+         * GET CURRENT USER'S COMPLETE SUBMISSION HISTORY
          * ======================================================
          */
 
@@ -182,6 +192,79 @@ export default function TasksPage() {
 
         /*
          * ======================================================
+         * NORMALIZE SUBMISSIONS FIRST
+         * ======================================================
+         */
+
+        const normalizedSubmissions: Submission[] =
+          (
+            loadedSubmissions ?? []
+          ).map(
+            (submission: any) => ({
+              id:
+                String(
+                  submission.id
+                ),
+
+              task_id:
+                String(
+                  submission.task_id
+                ),
+
+              package_amount:
+                submission.package_amount !=
+                null
+                  ? Number(
+                      submission.package_amount
+                    )
+                  : undefined,
+
+              title:
+                submission.title ??
+                undefined,
+
+              reward_amount:
+                submission.reward_amount !=
+                null
+                  ? Number(
+                      submission.reward_amount
+                    )
+                  : undefined,
+
+              screenshot_url:
+                submission.screenshot_url ??
+                null,
+
+              status:
+                submission.status ===
+                  "pending" ||
+                submission.status ===
+                  "approved" ||
+                submission.status ===
+                  "rejected"
+                  ? submission.status
+                  : "pending",
+
+              admin_note:
+                submission.admin_note ??
+                null,
+
+              submitted_at:
+                submission.submitted_at ??
+                "",
+
+              reviewed_at:
+                submission.reviewed_at ??
+                null,
+
+              cycle_started_at:
+                submission.cycle_started_at ??
+                "",
+            })
+          );
+
+        /*
+         * ======================================================
          * NORMALIZE TASKS
          * ======================================================
          */
@@ -191,22 +274,60 @@ export default function TasksPage() {
             (task: any) => {
               const cycleStartedAt =
                 task.cycle_started_at ??
-                new Date().toISOString();
+                "";
 
-              const expiresAt =
+              let expiresAt =
                 task.expires_at ??
-                new Date(
+                "";
+
+              /*
+               * Fallback expiry calculation
+               */
+
+              if (
+                !expiresAt &&
+                cycleStartedAt
+              ) {
+                const cycleTime =
                   new Date(
                     cycleStartedAt
-                  ).getTime() +
-                    24 *
-                      60 *
-                      60 *
-                      1000
-                ).toISOString();
+                  ).getTime();
+
+                if (
+                  !Number.isNaN(
+                    cycleTime
+                  )
+                ) {
+                  expiresAt =
+                    new Date(
+                      cycleTime +
+                        24 *
+                          60 *
+                          60 *
+                          1000
+                    ).toISOString();
+                }
+              }
+
+              /*
+               * =================================================
+               * IMPORTANT:
+               *
+               * DO NOT use task.submission_status here.
+               *
+               * It is intentionally set to null.
+               *
+               * Current user's submission will be found by
+               * getSubmission() below using the submission list
+               * returned for auth.uid().
+               * =================================================
+               */
 
               return {
-                id: task.id,
+                id:
+                  String(
+                    task.id
+                  ),
 
                 package_amount:
                   Number(
@@ -243,7 +364,8 @@ export default function TasksPage() {
                   ),
 
                 created_at:
-                  task.created_at,
+                  task.created_at ??
+                  "",
 
                 expires_at:
                   expiresAt,
@@ -258,80 +380,12 @@ export default function TasksPage() {
                   ),
 
                 submission_status:
-                  task.submission_status ===
-                    "pending" ||
-                  task.submission_status ===
-                    "approved" ||
-                  task.submission_status ===
-                    "rejected"
-                    ? task.submission_status
-                    : null,
+                  null,
 
                 cycle_started_at:
                   cycleStartedAt,
               };
             }
-          );
-
-        /*
-         * ======================================================
-         * NORMALIZE SUBMISSIONS
-         * ======================================================
-         */
-
-        const normalizedSubmissions: Submission[] =
-          (
-            loadedSubmissions ??
-            []
-          ).map(
-            (submission: any) => ({
-              id:
-                submission.id,
-
-              task_id:
-                submission.task_id,
-
-              package_amount:
-                submission.package_amount !=
-                null
-                  ? Number(
-                      submission.package_amount
-                    )
-                  : undefined,
-
-              title:
-                submission.title ??
-                undefined,
-
-              reward_amount:
-                submission.reward_amount !=
-                null
-                  ? Number(
-                      submission.reward_amount
-                    )
-                  : undefined,
-
-              screenshot_url:
-                submission.screenshot_url ??
-                null,
-
-              status:
-                submission.status,
-
-              admin_note:
-                submission.admin_note ??
-                null,
-
-              submitted_at:
-                submission.submitted_at,
-
-              reviewed_at:
-                submission.reviewed_at ??
-                null,
-
-              cycle_started_at:
-                submission.cycle_started_at,
-            })
           );
 
         /*
@@ -411,6 +465,9 @@ export default function TasksPage() {
   /*
    * ============================================================
    * GET CURRENT GLOBAL CYCLE START
+   *
+   * The cycle itself is GLOBAL.
+   * Submission belongs to USER + TASK + CYCLE.
    * ============================================================
    */
 
@@ -423,16 +480,35 @@ export default function TasksPage() {
           return null;
         }
 
-        return new Date(
-          task.cycle_started_at
-        ).getTime();
+        const time =
+          new Date(
+            task.cycle_started_at
+          ).getTime();
+
+        if (
+          Number.isNaN(time)
+        ) {
+          return null;
+        }
+
+        return time;
       },
       []
     );
 
   /*
    * ============================================================
-   * FIND SUBMISSION FOR CURRENT GLOBAL CYCLE
+   * FIND CURRENT USER'S SUBMISSION FOR CURRENT CYCLE
+   *
+   * IMPORTANT:
+   *
+   * submissions comes from:
+   *
+   * get_my_task_submissions()
+   *
+   * which already uses auth.uid().
+   *
+   * Therefore another user's submission can NEVER be used here.
    * ============================================================
    */
 
@@ -472,6 +548,14 @@ export default function TasksPage() {
                   submission.cycle_started_at
                 ).getTime();
 
+              if (
+                Number.isNaN(
+                  submissionCycle
+                )
+              ) {
+                return false;
+              }
+
               return (
                 submissionCycle ===
                 currentCycleStart
@@ -479,48 +563,10 @@ export default function TasksPage() {
             }
           );
 
-        if (
-          currentCycleSubmission
-        ) {
-          return currentCycleSubmission;
-        }
-
-        if (
-          task.submission_status ===
-            "pending" ||
-          task.submission_status ===
-            "approved" ||
-          task.submission_status ===
-            "rejected"
-        ) {
-          return {
-            id:
-              `current-${task.id}`,
-
-            task_id:
-              task.id,
-
-            screenshot_url:
-              null,
-
-            status:
-              task.submission_status,
-
-            admin_note:
-              null,
-
-            submitted_at:
-              "",
-
-            reviewed_at:
-              null,
-
-            cycle_started_at:
-              task.cycle_started_at,
-          } as Submission;
-        }
-
-        return null;
+        return (
+          currentCycleSubmission ??
+          null
+        );
       },
       [
         getCurrentCycleStart,
@@ -550,10 +596,24 @@ export default function TasksPage() {
           (currentTasks) =>
             currentTasks.map(
               (task) => {
+                if (
+                  !task.expires_at
+                ) {
+                  return task;
+                }
+
                 const expiresAt =
                   new Date(
                     task.expires_at
                   ).getTime();
+
+                if (
+                  Number.isNaN(
+                    expiresAt
+                  )
+                ) {
+                  return task;
+                }
 
                 const remainingSeconds =
                   Math.max(
@@ -583,6 +643,10 @@ export default function TasksPage() {
             )
         );
 
+        /*
+         * Reload once when cycle ends.
+         */
+
         if (
           cycleEnded &&
           !cycleRefreshLock.current
@@ -611,6 +675,12 @@ export default function TasksPage() {
   /*
    * ============================================================
    * ADMIN GLOBAL REFRESH DETECTION
+   * ============================================================
+   *
+   * If Admin activates/deactivates a task, the page refreshes
+   * the task list.
+   *
+   * This does NOT make submissions global.
    * ============================================================
    */
 
@@ -711,8 +781,10 @@ export default function TasksPage() {
 
       const minutes =
         Math.floor(
-          (safeSeconds %
-            3600) /
+          (
+            safeSeconds %
+            3600
+          ) /
             60
         );
 
@@ -756,6 +828,10 @@ export default function TasksPage() {
       setMessage(null);
       setErrorMessage(null);
 
+      /*
+       * Only THIS USER'S submission is checked.
+       */
+
       const submission =
         getSubmission(
           task
@@ -796,6 +872,10 @@ export default function TasksPage() {
     ) => {
       setMessage(null);
       setErrorMessage(null);
+
+      /*
+       * Only THIS USER'S current-cycle submission is checked.
+       */
 
       const submission =
         getSubmission(
@@ -870,11 +950,12 @@ export default function TasksPage() {
         setSelectedFile(
           null
         );
+
         return;
       }
 
       /*
-       * Basic image validation
+       * Image validation
        */
 
       if (
@@ -890,7 +971,9 @@ export default function TasksPage() {
           "শুধু Image Screenshot নির্বাচন করুন।"
         );
 
-        event.target.value = "";
+        event.target.value =
+          "";
+
         return;
       }
 
@@ -912,7 +995,9 @@ export default function TasksPage() {
           "Screenshot-এর size সর্বোচ্চ 10MB হতে পারবে।"
         );
 
-        event.target.value = "";
+        event.target.value =
+          "";
+
         return;
       }
 
@@ -946,7 +1031,11 @@ export default function TasksPage() {
 
       /*
        * ======================================================
-       * CURRENT GLOBAL CYCLE CHECK
+       * FRONTEND CURRENT USER CHECK
+       * ======================================================
+       *
+       * This checks only this user's submission history.
+       * Another user's submission cannot affect this.
        * ======================================================
        */
 
@@ -1147,6 +1236,16 @@ export default function TasksPage() {
          * ====================================================
          * DATABASE SUBMISSION
          * ====================================================
+         *
+         * submit_package_task() itself uses auth.uid().
+         *
+         * Database unique key:
+         *
+         * (user_id, task_id, cycle_started_at)
+         *
+         * Therefore multiple users can submit the same task
+         * during the same global cycle.
+         * ====================================================
          */
 
         let submissionId:
@@ -1182,7 +1281,9 @@ export default function TasksPage() {
           }
 
           submissionId =
-            data;
+            data
+              ? String(data)
+              : null;
         } catch (
           rpcError: any
         ) {
@@ -1234,13 +1335,17 @@ export default function TasksPage() {
           null
         );
 
+        setErrorMessage(
+          null
+        );
+
         setMessage(
           "কাজ সফলভাবে জমা হয়েছে। Admin যাচাই করার পর Reward যোগ হবে।"
         );
 
         /*
          * ====================================================
-         * RELOAD DATABASE STATE
+         * RELOAD USER-SPECIFIC DATABASE STATE
          * ====================================================
          */
 
@@ -1289,6 +1394,22 @@ export default function TasksPage() {
         ) {
           setErrorMessage(
             "এই কাজের জন্য আপনার কোনো Active Package নেই।"
+          );
+        } else if (
+          normalizedError.includes(
+            "task is not available"
+          )
+        ) {
+          setErrorMessage(
+            "এই কাজটি বর্তমানে Admin-এর মাধ্যমে বন্ধ করা হয়েছে।"
+          );
+        } else if (
+          normalizedError.includes(
+            "task not found"
+          )
+        ) {
+          setErrorMessage(
+            "এই কাজটি আর পাওয়া যাচ্ছে না।"
           );
         } else if (
           normalizedError.includes(
@@ -1512,6 +1633,11 @@ export default function TasksPage() {
             <div className="space-y-4">
               {tasks.map(
                 (task) => {
+                  /*
+                   * IMPORTANT:
+                   * submission is ONLY current user's submission.
+                   */
+
                   const submission =
                     getSubmission(
                       task
