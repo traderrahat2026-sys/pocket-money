@@ -53,14 +53,7 @@ export default function PackageCard({ pkg }: Props) {
 
   const amount = Number(pkg.package_amount || 0);
   const dailyEarning = Number(pkg.daily_reward || 0);
-
-  /*
-   * IMPORTANT:
-   * Package duration comes from public.packages.
-   * Fallback is 90 days, NOT 30.
-   */
   const durationDays = Number(pkg.duration_days || 90);
-
   const totalEarning = dailyEarning * durationDays;
 
   const packageName =
@@ -242,29 +235,16 @@ export default function PackageCard({ pkg }: Props) {
 
   /*
    * ==========================================================
-   * EXACT ACTIVE PACKAGE CHECK
-   *
-   * IMPORTANT:
-   * We only use:
-   *
-   * user_package_activations.package_amount
-   *
-   * to identify this package.
-   *
-   * We do NOT use expires_at because that column does
-   * not exist in the database.
+   * CHECK WHETHER ACTIVATION IS REALLY ACTIVE
    * ==========================================================
    */
 
   const isActivationActive = (
     activation: Activation
   ): boolean => {
-    /*
-     * The RPC already returns only active packages.
-     *
-     * Still check deactivated_at on the client as an
-     * additional safety check.
-     */
+    if (!activation) {
+      return false;
+    }
 
     if (
       activation.deactivated_at
@@ -288,17 +268,133 @@ export default function PackageCard({ pkg }: Props) {
 
   /*
    * ==========================================================
-   * LOAD ACTIVE STATUS FROM DATABASE
+   * FIND PACKAGE IN RPC RESULT
+   * ==========================================================
+   */
+
+  const findMatchingActivation = (
+    activations: Activation[]
+  ) => {
+    return activations.find(
+      (activation) => {
+        const activeAmount =
+          Number(
+            activation.package_amount
+          );
+
+        return (
+          Number.isFinite(activeAmount) &&
+          Math.abs(activeAmount - amount) <
+            0.01 &&
+          isActivationActive(
+            activation
+          )
+        );
+      }
+    );
+  };
+
+
+  /*
+   * ==========================================================
+   * DIRECT DATABASE FALLBACK
    *
-   * This is the MOST IMPORTANT part.
+   * IMPORTANT:
    *
-   * Every page refresh performs a fresh RPC request.
-   * React state is NOT used as the source of truth.
+   * If get_my_active_packages() somehow returns no matching
+   * package, we directly check the user's activation table.
+   *
+   * This prevents the UI from saying "inactive" while the
+   * database already contains an active activation.
+   * ==========================================================
+   */
+
+  const checkActivationDirectly = useCallback(
+    async (
+      userId: string
+    ): Promise<boolean | null> => {
+      try {
+        const {
+          data,
+          error,
+        } = await supabase
+          .from(
+            "user_package_activations"
+          )
+          .select(
+            "id, package_amount, activated_at, deactivated_at, is_active"
+          )
+          .eq(
+            "user_id",
+            userId
+          )
+          .eq(
+            "is_active",
+            true
+          )
+          .eq(
+            "package_amount",
+            amount
+          )
+          .order(
+            "activated_at",
+            {
+              ascending: false,
+            }
+          )
+          .limit(1)
+          .maybeSingle();
+
+        if (error) {
+          console.error(
+            "DIRECT ACTIVE PACKAGE CHECK ERROR:",
+            error
+          );
+
+          return null;
+        }
+
+        if (!data) {
+          return false;
+        }
+
+        const activation =
+          data as Activation;
+
+        return isActivationActive(
+          activation
+        );
+      } catch (error) {
+        console.error(
+          "DIRECT ACTIVE PACKAGE CHECK FAILED:",
+          error
+        );
+
+        return null;
+      }
+    },
+    [amount]
+  );
+
+
+  /*
+   * ==========================================================
+   * LOAD ACTIVE STATUS
+   *
+   * SOURCE OF TRUTH:
+   *
+   * 1. get_my_active_packages()
+   * 2. Direct user_package_activations fallback
+   *
+   * We NEVER randomly set inactive because of a temporary
+   * network/RPC problem.
    * ==========================================================
    */
 
   const checkActivePackage = useCallback(
-    async (showLoader = false) => {
+    async (
+      showLoader = false
+    ) => {
       try {
         if (showLoader) {
           setIsChecking(true);
@@ -306,16 +402,22 @@ export default function PackageCard({ pkg }: Props) {
 
         /*
          * ------------------------------------------------------
-         * Get current logged-in user
+         * CURRENT USER
          * ------------------------------------------------------
          */
 
         const {
-          data: { user },
+          data: {
+            user,
+          },
           error: userError,
-        } = await supabase.auth.getUser();
+        } =
+          await supabase.auth.getUser();
 
-        if (userError || !user) {
+        if (
+          userError ||
+          !user
+        ) {
           setIsActivated(false);
           setIsChecking(false);
           return;
@@ -324,7 +426,7 @@ export default function PackageCard({ pkg }: Props) {
 
         /*
          * ------------------------------------------------------
-         * Read active packages directly from Supabase RPC
+         * FIRST: RPC
          * ------------------------------------------------------
          */
 
@@ -335,91 +437,82 @@ export default function PackageCard({ pkg }: Props) {
           "get_my_active_packages"
         );
 
-        if (error) {
+        if (!error) {
+          const activations =
+            normalizeActivations(
+              data
+            );
+
+          const matchingActivation =
+            findMatchingActivation(
+              activations
+            );
+
+          /*
+           * RPC found exact package
+           */
+          if (
+            matchingActivation
+          ) {
+            setIsActivated(true);
+            setIsChecking(false);
+            return;
+          }
+
+          /*
+           * RPC successfully returned data but this
+           * package was not found.
+           *
+           * Do NOT immediately mark inactive.
+           * Use direct database fallback.
+           */
+        } else {
           console.error(
             "ACTIVE PACKAGE RPC ERROR:",
             error
           );
-
-          /*
-           * Do not change an already-known active state
-           * because of a temporary request failure.
-           */
-
-          setIsChecking(false);
-          return;
         }
 
 
         /*
          * ------------------------------------------------------
-         * Normalize response
+         * SECOND: DIRECT DATABASE FALLBACK
          * ------------------------------------------------------
          */
 
-        const activations =
-          normalizeActivations(data);
-
-
-        /*
-         * ------------------------------------------------------
-         * FIND EXACT PACKAGE
-         *
-         * Example:
-         *
-         * Current card = 1500
-         *
-         * DB:
-         * 500
-         * 1000
-         * 1500
-         * 5000
-         *
-         * It must find exactly 1500.
-         * ------------------------------------------------------
-         */
-
-        const matchingActivation =
-          activations.find(
-            (activation) => {
-              const activeAmount =
-                Number(
-                  activation.package_amount
-                );
-
-              return (
-                Number.isFinite(activeAmount) &&
-                activeAmount === amount
-              );
-            }
+        const directResult =
+          await checkActivationDirectly(
+            user.id
           );
 
+        /*
+         * Direct check confirms ACTIVE
+         */
+        if (
+          directResult === true
+        ) {
+          setIsActivated(true);
+          setIsChecking(false);
+          return;
+        }
 
         /*
-         * ------------------------------------------------------
-         * PACKAGE NOT ACTIVE
-         * ------------------------------------------------------
+         * Direct check confirms NOT ACTIVE
          */
-
-        if (!matchingActivation) {
+        if (
+          directResult === false
+        ) {
           setIsActivated(false);
           setIsChecking(false);
           return;
         }
 
-
         /*
-         * ------------------------------------------------------
-         * PACKAGE FOUND
-         * ------------------------------------------------------
+         * Direct check failed.
+         *
+         * Keep previous state.
+         * Do NOT randomly show inactive.
          */
-
-        const active =
-          isActivationActive(
-            matchingActivation
-          );
-
-        setIsActivated(active);
         setIsChecking(false);
 
       } catch (error) {
@@ -429,14 +522,15 @@ export default function PackageCard({ pkg }: Props) {
         );
 
         /*
-         * Keep previous state during unexpected
-         * temporary errors.
+         * Keep previous state on temporary errors.
          */
-
         setIsChecking(false);
       }
     },
-    [amount]
+    [
+      checkActivationDirectly,
+      amount,
+    ]
   );
 
 
@@ -444,20 +538,25 @@ export default function PackageCard({ pkg }: Props) {
    * ==========================================================
    * INITIAL LOAD
    * AUTH CHANGE
-   * TAB FOCUS
-   * PERIODIC REFRESH
+   * PAGE FOCUS
+   * PAGE SHOW
+   * PERIODIC SYNC
    * ==========================================================
    */
 
   useEffect(() => {
+    let mounted = true;
+
     /*
-     * Immediately check database when card loads.
+     * Initial database check
      */
-    checkActivePackage(true);
+    if (mounted) {
+      checkActivePackage(true);
+    }
 
 
     /*
-     * Supabase authentication changes.
+     * Supabase auth listener
      */
     const {
       data: {
@@ -467,29 +566,41 @@ export default function PackageCard({ pkg }: Props) {
       supabase.auth.onAuthStateChange(
         (event) => {
           if (
-            event === "SIGNED_IN" ||
-            event === "SIGNED_OUT" ||
-            event === "TOKEN_REFRESHED" ||
-            event === "USER_UPDATED"
+            event ===
+              "SIGNED_IN" ||
+            event ===
+              "SIGNED_OUT" ||
+            event ===
+              "TOKEN_REFRESHED" ||
+            event ===
+              "USER_UPDATED"
           ) {
-            /*
-             * Small delay prevents race conditions
-             * between auth state and session storage.
-             */
-
-            window.setTimeout(() => {
-              checkActivePackage(true);
-            }, 150);
+            window.setTimeout(
+              () => {
+                if (
+                  mounted
+                ) {
+                  checkActivePackage(
+                    true
+                  );
+                }
+              },
+              200
+            );
           }
         }
       );
 
 
     /*
-     * When returning to the page/tab.
+     * Browser/tab focus
      */
     const handleFocus = () => {
-      checkActivePackage(false);
+      if (mounted) {
+        checkActivePackage(
+          false
+        );
+      }
     };
 
     window.addEventListener(
@@ -499,10 +610,14 @@ export default function PackageCard({ pkg }: Props) {
 
 
     /*
-     * When browser restores page from bfcache.
+     * Browser bfcache restore
      */
     const handlePageShow = () => {
-      checkActivePackage(false);
+      if (mounted) {
+        checkActivePackage(
+          false
+        );
+      }
     };
 
     window.addEventListener(
@@ -512,15 +627,47 @@ export default function PackageCard({ pkg }: Props) {
 
 
     /*
-     * Periodic database synchronization.
+     * Visibility change
+     */
+    const handleVisibilityChange =
+      () => {
+        if (
+          document.visibilityState ===
+          "visible"
+        ) {
+          if (mounted) {
+            checkActivePackage(
+              false
+            );
+          }
+        }
+      };
+
+    document.addEventListener(
+      "visibilitychange",
+      handleVisibilityChange
+    );
+
+
+    /*
+     * Periodic sync
      */
     const interval =
-      window.setInterval(() => {
-        checkActivePackage(false);
-      }, 10000);
+      window.setInterval(
+        () => {
+          if (mounted) {
+            checkActivePackage(
+              false
+            );
+          }
+        },
+        8000
+      );
 
 
     return () => {
+      mounted = false;
+
       subscription.unsubscribe();
 
       window.removeEventListener(
@@ -533,9 +680,18 @@ export default function PackageCard({ pkg }: Props) {
         handlePageShow
       );
 
-      window.clearInterval(interval);
+      document.removeEventListener(
+        "visibilitychange",
+        handleVisibilityChange
+      );
+
+      window.clearInterval(
+        interval
+      );
     };
-  }, [checkActivePackage]);
+  }, [
+    checkActivePackage,
+  ]);
 
 
   /*
@@ -544,291 +700,55 @@ export default function PackageCard({ pkg }: Props) {
    * ==========================================================
    */
 
-  const handleActivate = async () => {
-    if (isActivating) {
-      return;
-    }
-
-    try {
-      setIsActivating(true);
-
-
-      /*
-       * ------------------------------------------------------
-       * CHECK LOGIN
-       * ------------------------------------------------------
-       */
-
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
-
-      if (!user) {
-        showPopup(
-          "login",
-          "Login প্রয়োজন",
-          "প্যাকেজ চালু করতে আগে Login করুন।"
-        );
-
+  const handleActivate =
+    async () => {
+      if (isActivating) {
         return;
       }
 
-
-      /*
-       * ------------------------------------------------------
-       * FINAL DATABASE CHECK
-       * ------------------------------------------------------
-       */
-
-      const {
-        data: activeData,
-        error: activeError,
-      } = await supabase.rpc(
-        "get_my_active_packages"
-      );
-
-      if (activeError) {
-        console.error(
-          "PRE ACTIVATION CHECK ERROR:",
-          activeError
-        );
-
-        showPopup(
-          "error",
-          "তথ্য যাচাই করা যায়নি",
-          "প্যাকেজ চালু করার আগে আপনার বর্তমান প্যাকেজের তথ্য যাচাই করা যায়নি। আবার চেষ্টা করুন।"
-        );
-
-        return;
-      }
+      try {
+        setIsActivating(true);
 
 
-      const activations =
-        normalizeActivations(
-          activeData
-        );
+        /*
+         * ------------------------------------------------------
+         * CHECK LOGIN
+         * ------------------------------------------------------
+         */
 
+        const {
+          data: {
+            user,
+          },
+        } =
+          await supabase.auth.getUser();
 
-      /*
-       * Find this exact package.
-       */
-
-      const existing =
-        activations.find(
-          (activation) =>
-            Number(
-              activation.package_amount
-            ) === amount
-        );
-
-
-      /*
-       * Already active.
-       */
-
-      if (
-        existing &&
-        isActivationActive(existing)
-      ) {
-        setIsActivated(true);
-
-        showPopup(
-          "warning",
-          "প্যাকেজ ইতিমধ্যে চালু",
-          "এই প্যাকেজটি আপনার অ্যাকাউন্টে ইতিমধ্যে সক্রিয় আছে।"
-        );
-
-        return;
-      }
-
-
-      /*
-       * ------------------------------------------------------
-       * ACTIVATE IN DATABASE
-       * ------------------------------------------------------
-       */
-
-      const {
-        data,
-        error,
-      } = await supabase.rpc(
-        "activate_my_package",
-        {
-          p_package_amount: amount,
-        }
-      );
-
-
-      if (error) {
-        console.error(
-          "PACKAGE ACTIVATION ERROR:",
-          error
-        );
-
-        const errorText =
-          String(
-            error.message || ""
-          ).toLowerCase();
-
-
-        if (
-          errorText.includes(
-            "insufficient"
-          ) ||
-          errorText.includes(
-            "balance"
-          ) ||
-          errorText.includes(
-            "not enough"
-          ) ||
-          errorText.includes(
-            "fund"
-          )
-        ) {
-          showPopup(
-            "error",
-            "ব্যালেন্স পর্যাপ্ত নয়",
-            "এই প্যাকেজটি চালু করার জন্য আপনার অ্যাকাউন্টে পর্যাপ্ত ডিপোজিট ব্যালেন্স নেই।"
-          );
-        } else if (
-          errorText.includes(
-            "already"
-          ) ||
-          errorText.includes(
-            "active"
-          )
-        ) {
-          /*
-           * Database itself confirms that this package
-           * is already active.
-           */
-
-          setIsActivated(true);
-
-          showPopup(
-            "warning",
-            "প্যাকেজ ইতিমধ্যে চালু",
-            "এই প্যাকেজটি আপনার অ্যাকাউন্টে ইতিমধ্যে সক্রিয় আছে।"
-          );
-        } else if (
-          errorText.includes(
-            "authentication"
-          ) ||
-          errorText.includes(
-            "unauthorized"
-          ) ||
-          errorText.includes(
-            "not authenticated"
-          ) ||
-          errorText.includes(
-            "auth_required"
-          )
-        ) {
+        if (!user) {
           showPopup(
             "login",
             "Login প্রয়োজন",
             "প্যাকেজ চালু করতে আগে Login করুন।"
           );
-        } else {
-          showPopup(
-            "error",
-            "প্যাকেজ চালু করা যায়নি",
-            error.message ||
-              "প্যাকেজ চালু করার সময় একটি সমস্যা হয়েছে। আবার চেষ্টা করুন।"
-          );
+
+          return;
         }
 
-        return;
-      }
 
+        /*
+         * ------------------------------------------------------
+         * FINAL ACTIVE CHECK
+         *
+         * Direct DB check first.
+         * ------------------------------------------------------
+         */
 
-      /*
-       * ------------------------------------------------------
-       * PARSE ACTIVATION RESULT
-       * ------------------------------------------------------
-       */
-
-      let result: any = data;
-
-      if (Array.isArray(result)) {
-        result = result[0];
-      }
-
-      if (
-        typeof result === "string"
-      ) {
-        const normalized =
-          result.toUpperCase();
-
-        if (
-          normalized.includes(
-            "ACTIVATED"
-          ) ||
-          normalized.includes(
-            "SUCCESS"
-          )
-        ) {
-          result = {
-            success: true,
-          };
-        } else {
-          result = {
-            success: false,
-            message: result,
-          };
-        }
-      }
-
-
-      const success =
-        result?.success === true ||
-        result?.status ===
-          "ACTIVATED" ||
-        result?.status ===
-          "SUCCESS";
-
-
-      /*
-       * ------------------------------------------------------
-       * RPC RETURNED FAILURE
-       * ------------------------------------------------------
-       */
-
-      if (!success) {
-        const message =
-          result?.message ||
-          result?.error ||
-          "প্যাকেজ চালু করার সময় একটি সমস্যা হয়েছে।";
-
-        const messageText =
-          String(
-            message
-          ).toLowerCase();
-
-
-        if (
-          messageText.includes(
-            "insufficient"
-          ) ||
-          messageText.includes(
-            "balance"
-          ) ||
-          messageText.includes(
-            "not enough"
-          )
-        ) {
-          showPopup(
-            "error",
-            "ব্যালেন্স পর্যাপ্ত নয়",
-            "এই প্যাকেজটি চালু করার জন্য আপনার অ্যাকাউন্টে পর্যাপ্ত ডিপোজিট ব্যালেন্স নেই।"
+        const directExisting =
+          await checkActivationDirectly(
+            user.id
           );
-        } else if (
-          messageText.includes(
-            "already"
-          ) ||
-          messageText.includes(
-            "active"
-          )
+
+        if (
+          directExisting === true
         ) {
           setIsActivated(true);
 
@@ -837,69 +757,376 @@ export default function PackageCard({ pkg }: Props) {
             "প্যাকেজ ইতিমধ্যে চালু",
             "এই প্যাকেজটি আপনার অ্যাকাউন্টে ইতিমধ্যে সক্রিয় আছে।"
           );
+
+          return;
+        }
+
+
+        /*
+         * ------------------------------------------------------
+         * RPC ACTIVE CHECK
+         * ------------------------------------------------------
+         */
+
+        const {
+          data: activeData,
+          error: activeError,
+        } =
+          await supabase.rpc(
+            "get_my_active_packages"
+          );
+
+        if (
+          !activeError
+        ) {
+          const activations =
+            normalizeActivations(
+              activeData
+            );
+
+          const existing =
+            findMatchingActivation(
+              activations
+            );
+
+          if (existing) {
+            setIsActivated(true);
+
+            showPopup(
+              "warning",
+              "প্যাকেজ ইতিমধ্যে চালু",
+              "এই প্যাকেজটি আপনার অ্যাকাউন্টে ইতিমধ্যে সক্রিয় আছে।"
+            );
+
+            return;
+          }
         } else {
-          showPopup(
-            "error",
-            "প্যাকেজ চালু করা যায়নি",
-            String(message)
+          console.error(
+            "PRE ACTIVATION RPC CHECK ERROR:",
+            activeError
           );
         }
 
-        return;
+
+        /*
+         * ------------------------------------------------------
+         * ACTIVATE IN DATABASE
+         *
+         * IMPORTANT:
+         * numeric overload
+         *
+         * p_package_amount
+         * ------------------------------------------------------
+         */
+
+        const {
+          data,
+          error,
+        } =
+          await supabase.rpc(
+            "activate_my_package",
+            {
+              p_package_amount:
+                amount,
+            },
+          );
+
+
+        /*
+         * ------------------------------------------------------
+         * DATABASE ERROR
+         * ------------------------------------------------------
+         */
+
+        if (error) {
+          console.error(
+            "PACKAGE ACTIVATION ERROR:",
+            error
+          );
+
+          const errorText =
+            String(
+              error.message ||
+                ""
+            ).toLowerCase();
+
+
+          if (
+            errorText.includes(
+              "insufficient"
+            ) ||
+            errorText.includes(
+              "balance"
+            ) ||
+            errorText.includes(
+              "not enough"
+            ) ||
+            errorText.includes(
+              "fund"
+            )
+          ) {
+            showPopup(
+              "error",
+              "ব্যালেন্স পর্যাপ্ত নয়",
+              "এই প্যাকেজটি চালু করার জন্য আপনার অ্যাকাউন্টে পর্যাপ্ত ডিপোজিট ব্যালেন্স নেই।"
+            );
+          } else if (
+            errorText.includes(
+              "already"
+            ) ||
+            errorText.includes(
+              "active"
+            )
+          ) {
+            /*
+             * Database says already active.
+             *
+             * Trust database.
+             */
+            setIsActivated(true);
+
+            showPopup(
+              "warning",
+              "প্যাকেজ ইতিমধ্যে চালু",
+              "এই প্যাকেজটি আপনার অ্যাকাউন্টে ইতিমধ্যে সক্রিয় আছে।"
+            );
+          } else if (
+            errorText.includes(
+              "authentication"
+            ) ||
+            errorText.includes(
+              "unauthorized"
+            ) ||
+            errorText.includes(
+              "not authenticated"
+            ) ||
+            errorText.includes(
+              "auth_required"
+            )
+          ) {
+            showPopup(
+              "login",
+              "Login প্রয়োজন",
+              "প্যাকেজ চালু করতে আগে Login করুন।"
+            );
+          } else {
+            showPopup(
+              "error",
+              "প্যাকেজ চালু করা যায়নি",
+              error.message ||
+                "প্যাকেজ চালু করার সময় একটি সমস্যা হয়েছে। আবার চেষ্টা করুন।"
+            );
+          }
+
+          return;
+        }
+
+
+        /*
+         * ------------------------------------------------------
+         * PARSE RESULT
+         * ------------------------------------------------------
+         */
+
+        let result: any =
+          data;
+
+        if (
+          Array.isArray(
+            result
+          )
+        ) {
+          result =
+            result[0];
+        }
+
+        if (
+          typeof result ===
+          "string"
+        ) {
+          const normalized =
+            result.toUpperCase();
+
+          if (
+            normalized.includes(
+              "ACTIVATED"
+            ) ||
+            normalized.includes(
+              "SUCCESS"
+            )
+          ) {
+            result = {
+              success: true,
+            };
+          } else {
+            result = {
+              success: false,
+              message:
+                result,
+            };
+          }
+        }
+
+
+        const success =
+          result?.success ===
+            true ||
+          result?.status ===
+            "ACTIVATED" ||
+          result?.status ===
+            "SUCCESS";
+
+
+        /*
+         * ------------------------------------------------------
+         * RPC RETURNED FAILURE
+         * ------------------------------------------------------
+         */
+
+        if (!success) {
+          const message =
+            result?.message ||
+            result?.error ||
+            "প্যাকেজ চালু করার সময় একটি সমস্যা হয়েছে।";
+
+          const messageText =
+            String(
+              message
+            ).toLowerCase();
+
+          if (
+            messageText.includes(
+              "insufficient"
+            ) ||
+            messageText.includes(
+              "balance"
+            ) ||
+            messageText.includes(
+              "not enough"
+            )
+          ) {
+            showPopup(
+              "error",
+              "ব্যালেন্স পর্যাপ্ত নয়",
+              "এই প্যাকেজটি চালু করার জন্য আপনার অ্যাকাউন্টে পর্যাপ্ত ডিপোজিট ব্যালেন্স নেই।"
+            );
+          } else if (
+            messageText.includes(
+              "already"
+            ) ||
+            messageText.includes(
+              "active"
+            )
+          ) {
+            setIsActivated(
+              true
+            );
+
+            showPopup(
+              "warning",
+              "প্যাকেজ ইতিমধ্যে চালু",
+              "এই প্যাকেজটি আপনার অ্যাকাউন্টে ইতিমধ্যে সক্রিয় আছে।"
+            );
+          } else {
+            showPopup(
+              "error",
+              "প্যাকেজ চালু করা যায়নি",
+              String(message)
+            );
+          }
+
+          return;
+        }
+
+
+        /*
+         * ------------------------------------------------------
+         * IMPORTANT:
+         *
+         * DO NOT immediately trust local React state.
+         *
+         * Activation was successful.
+         * Now read the actual database record again.
+         * ------------------------------------------------------
+         */
+
+        const verifyResult =
+          await checkActivationDirectly(
+            user.id
+          );
+
+
+        /*
+         * Database confirms active
+         */
+        if (
+          verifyResult === true
+        ) {
+          setIsActivated(
+            true
+          );
+
+          showPopup(
+            "success",
+            "প্যাকেজ চালু হয়েছে",
+            `${money(amount)} প্যাকেজটি সফলভাবে আপনার অ্যাকাউন্টে চালু হয়েছে।`
+          );
+
+          /*
+           * Refresh Next.js data
+           */
+          router.refresh();
+
+          return;
+        }
+
+
+        /*
+         * If direct table check didn't confirm,
+         * check the RPC one more time.
+         */
+
+        await checkActivePackage(
+          false
+        );
+
+
+        /*
+         * ------------------------------------------------------
+         * If React state became active, success.
+         * ------------------------------------------------------
+         */
+
+        setIsActivated(
+          (current) =>
+            current
+        );
+
+        showPopup(
+          "success",
+          "প্যাকেজ চালু হয়েছে",
+          `${money(amount)} প্যাকেজটি সফলভাবে আপনার অ্যাকাউন্টে চালু হয়েছে।`
+        );
+
+        router.refresh();
+
+      } catch (error) {
+        console.error(
+          "UNEXPECTED PACKAGE ACTIVATION ERROR:",
+          error
+        );
+
+        showPopup(
+          "error",
+          "একটি সমস্যা হয়েছে",
+          "প্যাকেজ চালু করার সময় একটি অপ্রত্যাশিত সমস্যা হয়েছে।"
+        );
+      } finally {
+        setIsActivating(
+          false
+        );
       }
-
-
-      /*
-       * ------------------------------------------------------
-       * SUCCESS
-       * ------------------------------------------------------
-       */
-
-      setIsActivated(true);
-
-      showPopup(
-        "success",
-        "প্যাকেজ চালু হয়েছে",
-        `${money(amount)} প্যাকেজটি সফলভাবে আপনার অ্যাকাউন্টে চালু হয়েছে।`
-      );
-
-
-      /*
-       * ------------------------------------------------------
-       * VERIFY AGAIN FROM DATABASE
-       *
-       * This is important.
-       *
-       * The UI will not simply trust the activation RPC.
-       * It reads the actual active package again.
-       * ------------------------------------------------------
-       */
-
-      await checkActivePackage(false);
-
-
-      /*
-       * Refresh Next.js data.
-       */
-
-      router.refresh();
-
-    } catch (error) {
-      console.error(
-        "UNEXPECTED PACKAGE ACTIVATION ERROR:",
-        error
-      );
-
-      showPopup(
-        "error",
-        "একটি সমস্যা হয়েছে",
-        "প্যাকেজ চালু করার সময় একটি অপ্রত্যাশিত সমস্যা হয়েছে।"
-      );
-
-    } finally {
-      setIsActivating(false);
-    }
-  };
+    };
 
 
   /*
@@ -909,7 +1136,9 @@ export default function PackageCard({ pkg }: Props) {
    */
 
   const handleDeposit = () => {
-    router.push("/deposit");
+    router.push(
+      "/deposit"
+    );
   };
 
 
@@ -921,7 +1150,8 @@ export default function PackageCard({ pkg }: Props) {
 
   const popupIcon = () => {
     if (
-      popup?.type === "success"
+      popup?.type ===
+      "success"
     ) {
       return (
         <div className="flex h-14 w-14 items-center justify-center rounded-full bg-emerald-100 text-emerald-600">
@@ -943,7 +1173,8 @@ export default function PackageCard({ pkg }: Props) {
     }
 
     if (
-      popup?.type === "warning"
+      popup?.type ===
+      "warning"
     ) {
       return (
         <div className="flex h-14 w-14 items-center justify-center rounded-full bg-amber-100 text-amber-600">
@@ -965,7 +1196,8 @@ export default function PackageCard({ pkg }: Props) {
     }
 
     if (
-      popup?.type === "login"
+      popup?.type ===
+      "login"
     ) {
       return (
         <div className="flex h-14 w-14 items-center justify-center rounded-full bg-blue-100 text-blue-600">
@@ -1374,7 +1606,8 @@ export default function PackageCard({ pkg }: Props) {
               </p>
 
 
-              {popup.type === "login" ? (
+              {popup.type ===
+              "login" ? (
 
                 <div className="mt-6 grid grid-cols-2 gap-2.5">
 
@@ -1405,8 +1638,11 @@ export default function PackageCard({ pkg }: Props) {
 
                 </div>
 
-              ) : popup.type === "error" &&
-                popup.message.includes("ব্যালেন্স") ? (
+              ) : popup.type ===
+                  "error" &&
+                popup.message.includes(
+                  "ব্যালেন্স"
+                ) ? (
 
                 <div className="mt-6 grid grid-cols-2 gap-2.5">
 
@@ -1442,9 +1678,11 @@ export default function PackageCard({ pkg }: Props) {
                     closePopup
                   }
                   className={`mt-6 h-11 w-full rounded-2xl text-sm font-black text-white ${
-                    popup.type === "success"
+                    popup.type ===
+                    "success"
                       ? "bg-emerald-600"
-                      : popup.type === "warning"
+                      : popup.type ===
+                        "warning"
                       ? "bg-amber-500"
                       : "bg-slate-900"
                   }`}
